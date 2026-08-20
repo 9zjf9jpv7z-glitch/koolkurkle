@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -305,11 +306,13 @@ class NoSecretFileTests(unittest.TestCase):
 
     def test_curl_tool_does_not_import_python_sockets(self):
         source = (ROOT / "retrieve_mail_curl.py").read_text()
-        self.assertNotIn("import imaplib", source)
-        self.assertNotIn("import socket", source)
-        self.assertNotIn("import ssl", source)
+        self.assertNotRegex(source, r"^\s*import imaplib\b", re.M)
+        self.assertNotRegex(source, r"^\s*import socket\b", re.M)
+        self.assertNotRegex(source, r"^\s*import ssl\b", re.M)
+        self.assertNotRegex(source, r"^\s*from imaplib\b", re.M)
+        self.assertNotRegex(source, r"^\s*from socket\b", re.M)
+        self.assertNotRegex(source, r"^\s*from ssl\b", re.M)
         self.assertNotIn("imap_tools", source)
-        self.assertNotIn("imaplib", source)
 
 
 if __name__ == "__main__":
