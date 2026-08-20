@@ -6,7 +6,7 @@ The IMAP TCP/TLS connection is opened by curl, not by Python sockets.
 That is the documented Mac path: Homebrew Python on the owner's Mac
 raises OSError [Errno 9] EBADF during imap-tools/imaplib connect.
 
-Does not mark mail read (BODY.PEEK / ;PEEK=1). Does not move mail.
+Does not mark mail read (UID FETCH … BODY.PEEK[]). Does not move mail.
 Never writes the app password to a file. Password comes from
 IMAP_APP_PASSWORD or a getpass prompt.
 
@@ -164,15 +164,16 @@ def run_curl(
         raise RuntimeError("internal error: password leaked into curl argv")
     result = subprocess.run(
         argv,
-        input=config,
+        input=config.encode("utf-8"),
         check=False,
         capture_output=True,
-        text=True,
     )
+    stdout = (result.stdout or b"").decode("latin-1")
+    stderr = (result.stderr or b"").decode("latin-1", errors="replace")
     if result.returncode != 0:
-        err = (result.stderr or result.stdout or "").strip()
+        err = (stderr or stdout).strip()
         raise CurlImapError(f"curl exited {result.returncode}: {err or 'no stderr'}")
-    return result.stdout
+    return stdout
 
 
 def mailbox_url(mailbox: str, *, host: str = HOST, port: int = PORT) -> str:
@@ -180,8 +181,28 @@ def mailbox_url(mailbox: str, *, host: str = HOST, port: int = PORT) -> str:
     return f"imaps://{host}:{port}/{encoded}"
 
 
-def message_url(mailbox: str, uid: str, *, host: str = HOST, port: int = PORT) -> str:
-    return f"{mailbox_url(mailbox, host=host, port=port)}/;UID={uid};PEEK=1"
+def fetch_body_request(uid: str) -> str:
+    if not str(uid).isdigit():
+        raise ValueError(f"invalid IMAP UID: {uid!r}")
+    return f"UID FETCH {uid} (BODY.PEEK[])"
+
+
+def fetch_body_transfer(
+    mailbox: str,
+    uid: str,
+    *,
+    host: str = HOST,
+    port: int = PORT,
+    write_out: str | None = None,
+) -> dict:
+    """Mailbox URL + custom FETCH. macOS /usr/bin/curl rejects /;UID=;PEEK=1."""
+    url = mailbox_url(mailbox, host=host, port=port)
+    if "/;UID=" in url or ";PEEK=" in url:
+        raise RuntimeError("internal error: fetch URL must not use /;UID= or ;PEEK=")
+    transfer = {"url": url, "request": fetch_body_request(uid)}
+    if write_out:
+        transfer["write_out"] = write_out
+    return transfer
 
 
 def unquote_imap(token: str) -> str:
@@ -243,6 +264,39 @@ def parse_search_uids(text: str) -> list[str]:
 
 def parse_flags_token(blob: str) -> list[str]:
     return [part for part in (blob or "").split() if part]
+
+
+FETCH_LITERAL = re.compile(
+    r"(?is)\* \d+ FETCH \(.*?(?:BODY(?:\.PEEK)?\[\]|RFC822(?:\.PEEK)?) \{(\d+)\}\r?\n"
+)
+
+
+def extract_rfc822_from_fetch(text: str) -> str:
+    """Pull the RFC822 bytes out of a curl UID FETCH response.
+
+    Newer curl may emit only the message. Older/list-mode curl may emit the
+    IMAP FETCH wrapper plus a {size} literal. Either is accepted. A FETCH
+    status line with no literal is an error (message was not downloaded).
+    """
+    if text == "":
+        raise CurlImapError("empty FETCH")
+    match = FETCH_LITERAL.search(text)
+    if match:
+        size = int(match.group(1))
+        start = match.end()
+        raw = text[start : start + size]
+        if len(raw) < size:
+            raise CurlImapError(
+                f"truncated FETCH literal: got {len(raw)} of {size} bytes"
+            )
+        return raw
+    first = text.lstrip().splitlines()[0] if text.strip() else ""
+    if first.startswith("*") and "FETCH" in first.upper():
+        raise CurlImapError(
+            "FETCH returned IMAP status only (no message literal). "
+            "This curl may not stream BODY.PEEK[] literals."
+        )
+    return text
 
 
 def parse_fetch_meta(text: str) -> dict[str, dict]:
@@ -459,13 +513,15 @@ def fetch_bodies(
     if not uids:
         return []
     transfers = [
-        {
-            "url": message_url(mailbox, uid, host=host, port=port),
-            "write_out": separator,
-        }
+        fetch_body_transfer(
+            mailbox, uid, host=host, port=port, write_out=separator
+        )
         for uid in uids
     ]
     config = build_curl_config(email=EMAIL, password=password, transfers=transfers)
+    for line in config.splitlines():
+        if line.startswith("url") and ("/;UID=" in line or ";PEEK=" in line):
+            raise RuntimeError("internal error: fetch URL must not use /;UID= or ;PEEK=")
     text = run_curl(curl_bin, config, password=password)
     parts = text.split(separator)
     # curl writes write-out after each transfer; trailing split is empty.
@@ -475,7 +531,7 @@ def fetch_bodies(
         raise CurlImapError(
             f"{mailbox}: expected {len(uids)} body(ies), got {len(parts)}"
         )
-    return parts
+    return [extract_rfc822_from_fetch(part) for part in parts]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -87,13 +87,17 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(rec["raw"], RFC822)
         self.assertTrue(rec["date"].startswith("2026-08-20"))
 
-    def test_urls_use_peek_and_imaps(self):
-        url = r.message_url("Sent Messages", "42")
-        self.assertTrue(url.startswith("imaps://imap.mail.me.com:993/"))
-        self.assertIn("Sent%20Messages", url)
-        self.assertIn(";UID=42", url)
-        self.assertIn(";PEEK=1", url)
-        self.assertNotIn("BODY[]", url)
+    def test_extract_rfc822_from_wrapped_fetch(self):
+        size = len(RFC822.encode("latin-1"))
+        wrapped = f"* 1 FETCH (UID 11 BODY[] {{{size}}}\r\n{RFC822})\r\n"
+        self.assertEqual(r.extract_rfc822_from_fetch(wrapped), RFC822)
+
+    def test_extract_rfc822_passthrough_raw_message(self):
+        self.assertEqual(r.extract_rfc822_from_fetch(RFC822), RFC822)
+
+    def test_extract_rfc822_rejects_status_only(self):
+        with self.assertRaises(r.CurlImapError):
+            r.extract_rfc822_from_fetch("* 1 FETCH (UID 11 BODY[] {20}\r\n")
 
 
 class CurlConfigTests(unittest.TestCase):
@@ -123,13 +127,23 @@ class CurlConfigTests(unittest.TestCase):
         )
         self.assertIn(r'p\"w', config)
 
-    def test_peek_url_in_body_transfer(self):
+    def test_fetch_url_has_no_uid_or_peek_query(self):
+        transfer = r.fetch_body_transfer("Archive", "96")
+        self.assertEqual(transfer["url"], "imaps://imap.mail.me.com:993/Archive")
+        self.assertNotIn("/;UID=", transfer["url"])
+        self.assertNotIn(";PEEK=", transfer["url"])
+        self.assertEqual(transfer["request"], "UID FETCH 96 (BODY.PEEK[])")
         config = r.build_curl_config(
             email="kirkbacon@me.com",
             password="x",
-            transfers=[{"url": r.message_url("INBOX", "9"), "write_out": "SEP"}],
+            transfers=[transfer],
         )
-        self.assertIn(";PEEK=1", config)
+        url_lines = [line for line in config.splitlines() if line.startswith("url")]
+        self.assertTrue(url_lines)
+        for line in url_lines:
+            self.assertNotIn("/;UID=", line)
+            self.assertNotIn(";PEEK=", line)
+        self.assertIn("UID FETCH 96 (BODY.PEEK[])", config)
         self.assertNotIn("STORE", config)
 
 
@@ -159,7 +173,7 @@ class FakeCurlRetrieveTests(unittest.TestCase):
                     '"20-Aug-2026 12:00:00 +0000" RFC822.SIZE 20)\\n'
                 )
                 + ")\n"
-                "elif ';UID=11;PEEK=1' in cfg:\n"
+                "elif 'UID FETCH 11 (BODY.PEEK[])' in cfg:\n"
                 "    sys.stdout.write(" + repr(RFC822) + ")\n"
                 "    m = re.search(r'write-out = \"(.*)\"', cfg)\n"
                 "    if m:\n"
@@ -198,7 +212,9 @@ class FakeCurlRetrieveTests(unittest.TestCase):
             cfg = (tmp_path / "last.cfg").read_text()
             # last transfer is a body fetch; password stays in config only
             self.assertIn(password, cfg)
-            self.assertIn(";PEEK=1", cfg)
+            self.assertIn("UID FETCH 11 (BODY.PEEK[])", cfg)
+            self.assertNotIn("/;UID=", cfg)
+            self.assertNotIn(";PEEK=", cfg)
 
             lines = [json.loads(line) for line in out.read_text().splitlines() if line]
             self.assertGreaterEqual(len(lines), 1)

@@ -15,8 +15,13 @@ scripts for IMAP TCP/TLS on that machine.
 ## Retrieve every message on macOS
 
 Password is read from the environment or a hidden prompt. It is never written
-to a file. Mail is not marked read (`BODY.PEEK` / `;PEEK=1`). Mail is not
+to a file. Mail is not marked read (`UID FETCH <uid> (BODY.PEEK[])` on the
+mailbox URL — the same custom-request style as `UID SEARCH ALL`). Mail is not
 moved. There is no `--apply` on this command.
+
+`/usr/bin/curl` on the owner's Mac accepts `imaps://imap.mail.me.com:993/Archive`
+plus a `request`, and rejects `…/Archive/;UID=96;PEEK=1` with curl (3) "URL
+using bad/illegal format". Fetch no longer puts `/;UID=` or `;PEEK=` in the URL.
 
 ```bash
 cd /path/to/koolkurkle
