@@ -1,0 +1,4 @@
+# Only needed by the legacy Python-IMAP scripts (icloud_mail.py,
+# retrieve_mail.py, move_icloud_junk.py). The Mac retrieve path is
+# retrieve_mail_curl.py and uses stdlib + curl; it has no pip deps.
+imap-tools>=1.6.0
