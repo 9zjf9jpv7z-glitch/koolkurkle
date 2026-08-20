@@ -6,9 +6,9 @@ A MailBoxIPv4 pin to 17.42.251.69 and a Python 3.14 hard-exit were already
 tried on the owner's Mac. Both failed: Homebrew Python raises
 OSError [Errno 9] EBADF during socket connect, before LOGIN.
 
-Do not use this file as the Mac retrieve command. Use
-/usr/bin/python3 retrieve_mail_imaplib.py (stdlib imaplib). Homebrew
-Python and ~/.venv raise EBADF; Apple curl LISTs but does not fetch bodies.
+Do not use this file as the Mac retrieve command. Owner zsh: Apple
+Python IMAP4_SSL EBADF before LOGIN; Apple curl LISTs but does not
+fetch bodies. Next test: retrieve_mail_openssl.py.
 
 Does not mark mail read. Does not move mail. Does not write the app password
 to any file. Password: IMAP_APP_PASSWORD or getpass.
@@ -73,7 +73,7 @@ def _hard_exit_if_python_314() -> None:
         sys.stderr.write(
             "Python 3.14 on this Mac raises EBADF on IMAP sockets "
             f"(you have {sys.version.split()[0]}).\n"
-            "Use /usr/bin/python3 retrieve_mail_imaplib.py instead.\n"
+            "Use /usr/bin/python3 retrieve_mail_openssl.py instead.\n"
         )
         raise SystemExit(2)
 

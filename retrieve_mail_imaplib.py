@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
-"""Retrieve every iCloud IMAP message via stdlib imaplib into JSONL.
+"""imaplib retrieve — failed in the owner's zsh.
 
-Documented Mac command (Apple Python, not Homebrew, not ~/.venv):
-
-  /usr/bin/python3 retrieve_mail_imaplib.py --list-only
-  /usr/bin/python3 retrieve_mail_imaplib.py --max-messages 1
-  /usr/bin/python3 retrieve_mail_imaplib.py
-
-Observed on the owner's Mac:
-  Proven: /usr/bin/python3 3.9.6 socket.create_connection to
-          imap.mail.me.com:993 succeeded (17.156.192.7).
-  Proven: Homebrew 3.11 and ~/.venv 3.14 raise EBADF on that connect.
-  Proven: Apple curl 8.7.1 can LIST (33 folders) but does not stream
-          FETCH literals (0 of N bytes after the {size} line).
-  Untested: imaplib login() and UID FETCH on /usr/bin/python3.
-
-Readonly mailbox (EXAMINE / select readonly=True). BODY.PEEK[] so mail
-is not marked read. Does not move mail. Password from IMAP_APP_PASSWORD
-or getpass; never written to a file.
-
-Default output: ~/Desktop/icloud_mail_all.jsonl
+/usr/bin/python3 ~/Desktop/retrieve_mail_imaplib.py --list-only died in
+IMAP4_SSL → socket.create_connection → OSError [Errno 9] EBADF before LOGIN.
+An earlier create_connection success was another agent process, not that
+Terminal. Use retrieve_mail_openssl.py instead.
 """
 
 from __future__ import annotations

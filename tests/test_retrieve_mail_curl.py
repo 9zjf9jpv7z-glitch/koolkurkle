@@ -156,7 +156,7 @@ class CurlScriptRedirectTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("retrieve_mail_imaplib.py", proc.stderr)
+        self.assertIn("retrieve_mail_openssl.py", proc.stderr)
         self.assertIn("/usr/bin/python3", proc.stderr)
 
 
@@ -216,7 +216,7 @@ class LegacyScriptTests(unittest.TestCase):
         self.assertIn("MailBoxIPv4", source)
         self.assertIn("17.42.251.69", source)
         self.assertIn("3, 14", source)
-        self.assertIn("retrieve_mail_imaplib.py", source)
+        self.assertIn("retrieve_mail_openssl.py", source)
         self.assertIn("mark_seen=False", source)
 
 

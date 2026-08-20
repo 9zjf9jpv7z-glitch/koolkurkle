@@ -2,73 +2,59 @@
 
 iCloud mail retrieve scripts for kirkbacon@me.com.
 
-## What is proven on the owner's Mac vs untested
+## What ran where (do not mix these up)
 
-| Check | Result |
-| --- | --- |
-| `/usr/bin/python3` 3.9.6 `socket.create_connection(("imap.mail.me.com", 993))` | Proven: connected (`17.156.192.7:993`). Also reached `1.1.1.1:443`. |
-| `/usr/bin/python3` `imaplib` LOGIN and UID FETCH | **Untested.** Same interpreter that opened the socket; login/fetch have not been run. |
-| `~/.venv` Python 3.14.7 + imap-tools | Proven fail: `OSError [Errno 9] EBADF` on IMAP connect, before LOGIN. |
-| `/opt/homebrew/bin/python3.11` `create_connection` to IMAP (and pip/HTTPS) | Proven fail: same EBADF. |
-| `/usr/bin/curl` 8.7.1 `retrieve_mail_curl.py --list-only` | Proven: 33 folders. |
-| Apple curl FETCH of message bodies | Proven fail: no RFC822 after the IMAP `{size}` line (`truncated FETCH literal: got 0 of N`). `;PEEK=1` URLs were curl (3). |
-| curl / nc to port 993 | Proven: reachable. LIST success means this is not a bad password. |
+| Check | Where | Result |
+| --- | --- | --- |
+| Apple `/usr/bin/curl` 8.7.1 LIST (33 folders) | Owner **zsh** | Succeeded |
+| Apple curl FETCH message bodies | Owner **zsh** | Failed: `{size}` line, **0 bytes** of RFC822 (`N` up to 14941242). `;PEEK=1` URLs were curl (3). |
+| `/usr/bin/python3` → CLT 3.9 `retrieve_mail_imaplib.py --list-only` | Owner **zsh** | Failed: `IMAP4_SSL` → `socket.create_connection` → `OSError [Errno 9] EBADF` in `sock.connect`, **before LOGIN** |
+| `/usr/bin/python3` 3.9.6 `create_connection` to `imap.mail.me.com:993` | **Another agent process** on that Mac, not this zsh | Reported success (`17.156.192.7`). **Not proven in the owner's Terminal.** |
+| Homebrew 3.11 and `~/.venv` 3.14 EBADF on IMAP connect | That other agent process | Failed. Not re-checked in this zsh; do not rely on those Pythons. |
+| curl / nc to port 993; LIST with a good app password | Owner **zsh** | Reachable. LIST success means this is not a bad password. |
 
-A Linux cloud VM connecting to IMAP is not proof of the Mac path.
+A Linux cloud VM talking to IMAP is not proof. An agent `create_connection` is not a zsh result.
 
-## Retrieve every message on macOS
+In the owner's Terminal, **Python sockets are not a working IMAP transport**. Curl can speak enough IMAP to LIST, but it does not download FETCH literals.
 
-Use **Apple `/usr/bin/python3`**. Do **not** use `~/.venv` or Homebrew Python.
+## Retrieve on macOS (next Terminal test)
 
-Password is `IMAP_APP_PASSWORD` or a getpass prompt. It is never written to a
-file. Mailboxes are opened read-only (`select(..., readonly=True)` / EXAMINE).
-Bodies are `UID FETCH … (BODY.PEEK[])`. Mail is not moved. No `--apply`.
+TLS and IMAP bytes go through **`/usr/bin/openssl s_client`**. Python only prompts, parses, and writes JSONL. Password is `IMAP_APP_PASSWORD` or getpass — never a file, never openssl argv.
+
+Mailboxes: `EXAMINE` (read-only). Bodies: `UID FETCH … (BODY.PEEK[])`. Nothing is moved. No `--apply`.
+
+Copy `retrieve_mail_openssl.py` to the Mac if you run from Desktop:
 
 ```bash
-cd /path/to/koolkurkle
-
-# Option A — env var in this terminal only (do not put this in a file):
-#   read -s IMAP_APP_PASSWORD && export IMAP_APP_PASSWORD
-#   printf '\n'
-/usr/bin/python3 retrieve_mail_imaplib.py --list-only
-/usr/bin/python3 retrieve_mail_imaplib.py --max-messages 1
-/usr/bin/python3 retrieve_mail_imaplib.py
+# read -s IMAP_APP_PASSWORD && export IMAP_APP_PASSWORD
+/usr/bin/python3 ~/Desktop/retrieve_mail_openssl.py --list-only
+/usr/bin/python3 ~/Desktop/retrieve_mail_openssl.py --max-messages 1
 ```
 
-Option B: omit the env var; the script prompts with getpass.
+From a repo checkout, same commands with that file path. Full retrieve (after those two succeed):
 
-What the full command does once login/fetch work:
+```bash
+/usr/bin/python3 retrieve_mail_openssl.py
+```
 
-- Host `imap.mail.me.com:993`, user `kirkbacon@me.com`
-- Every selectable folder
-- `~/Desktop/icloud_mail_all.jsonl` (override with `--output`)
-- Resume by `folder+uid` if the file already exists (`--overwrite` to replace)
+Output: `~/Desktop/icloud_mail_all.jsonl` (`--output` to override). Resume by `folder+uid` unless `--overwrite`.
 
-`--list-only` is the remaining Mac test for **login + LIST**.
-`--max-messages 1` is the remaining Mac test for **UID FETCH** (one real
-`text`/`raw` body). Do not treat retrieve as done until that Mac run
-writes a non-empty JSONL row.
+`--list-only` is the next Mac test for openssl LOGIN + LIST.
+`--max-messages 1` is the next Mac test for a real FETCH literal (`text`/`raw` non-empty).
+Do not treat retrieve as done until that zsh run writes one real JSONL row.
 
-## Desktop scripts (not the Mac retrieve path)
-
-These use Homebrew-incompatible stacks (imap-tools on venv/Homebrew, or
-Apple curl FETCH). Keep them; do not run them to retrieve mail on this Mac.
+## Other scripts in this repo
 
 | File | Role |
 | --- | --- |
-| `retrieve_mail_imaplib.py` | **Mac retrieve.** `/usr/bin/python3` + stdlib imaplib. |
-| `retrieve_mail_curl.py` | Failed fetch transport. LIST worked; FETCH literals did not. |
-| `icloud_mail.py` | Aug 13 INBOX filer → Receipts / Has Attachments / Old Unsubscribe. Dry-run unless `--apply`. |
-| `retrieve_mail.py` | Failed Python retrieve-all (`MailBoxIPv4` + 3.14 hard-exit). |
-| `move_icloud_junk.py` | Dry-run junk mover. `{folder, uid}` JSONL. `--apply` required. |
-
-```bash
-python3 icloud_mail.py          # dry-run; needs imap-tools on a working Python
-python3 move_icloud_junk.py     # dry-run; no --apply
-```
+| `retrieve_mail_openssl.py` | **Next Mac retrieve test.** openssl s_client IMAP. |
+| `retrieve_mail_imaplib.py` | Failed in owner zsh (Python EBADF before LOGIN). |
+| `retrieve_mail_curl.py` | LIST worked in zsh; FETCH literals did not. CLI points at the openssl script. |
+| `icloud_mail.py` | Aug 13 INBOX filer. Dry-run unless `--apply`. |
+| `retrieve_mail.py` | Failed imap-tools retrieve (`MailBoxIPv4` + 3.14 hard-exit). |
+| `move_icloud_junk.py` | Dry-run junk mover. `--apply` required. |
 
 ## JSONL record
 
-Each line is a JSON object with `folder`, `uid`, `flags`, `internaldate`,
-`date`, `from`, `to`, `cc`, `subject`, `message_id`, `text`, `html`,
-`rfc822_size`, and `raw` (full RFC822, latin-1-safe).
+Each line: `folder`, `uid`, `flags`, `internaldate`, `date`, `from`, `to`, `cc`,
+`subject`, `message_id`, `text`, `html`, `rfc822_size`, `raw` (RFC822, latin-1-safe).

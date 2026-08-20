@@ -7,7 +7,7 @@ fails on the owner's Mac with OSError [Errno 9] EBADF during socket connect,
 before LOGIN.
 
 This script is kept as the Desktop filer. It is not the Mac retrieve-all
-tool. On that Mac, use /usr/bin/python3 retrieve_mail_imaplib.py.
+tool. On that Mac, use retrieve_mail_openssl.py (not imaplib, not curl FETCH).
 
 Does not write the app password to any file. Requires --apply to move mail.
 """
