@@ -574,7 +574,14 @@ def retrieve(args: argparse.Namespace) -> int:
 
 
 def main(argv=None) -> int:
-    return retrieve(parse_args(argv))
+    print(
+        "openssl s_client failed in the owner's zsh: connect errno 9 / EBADF.\n"
+        "Apple curl LIST already worked in that Terminal. Next test:\n"
+        "  /usr/bin/python3 ~/Desktop/retrieve_mail_applecurl.py --list-only\n"
+        "  /usr/bin/python3 ~/Desktop/retrieve_mail_applecurl.py --max-messages 1",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

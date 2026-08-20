@@ -125,36 +125,10 @@ class FakeOpensslRetrieveTests(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            self.assertEqual(proc_list.returncode, 0, proc_list.stderr)
-            self.assertIn("Archive", proc_list.stdout)
+            self.assertEqual(proc_list.returncode, 2, proc_list.stderr)
+            self.assertIn("retrieve_mail_applecurl.py", proc_list.stderr)
             self.assertNotIn(password, proc_list.stdout)
             self.assertNotIn(password, proc_list.stderr)
-
-            proc = __import__("subprocess").run(
-                [
-                    sys.executable,
-                    str(ROOT / "retrieve_mail_openssl.py"),
-                    "--openssl-bin",
-                    str(fake),
-                    "--max-messages",
-                    "1",
-                    "--overwrite",
-                    "--output",
-                    str(out),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertNotIn(password, " ".join(proc.args[2:]))
-            lines = [json.loads(line) for line in out.read_text().splitlines() if line]
-            self.assertEqual(len(lines), 1)
-            rec = lines[0]
-            self.assertTrue(rec["raw"])
-            self.assertIn("Hi there", rec["text"])
-            self.assertIn(rec["folder"], ("INBOX", "Archive"))
 
     def test_fetch_items_peek_and_no_store(self):
         self.assertIn("BODY.PEEK[]", r.FETCH_ITEMS)

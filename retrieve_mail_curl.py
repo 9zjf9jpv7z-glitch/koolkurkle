@@ -715,11 +715,10 @@ def retrieve(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     print(
-        "Apple /usr/bin/curl 8.7.1 can LIST folders but does not download FETCH literals.\n"
-        "Apple Python IMAP4_SSL EBADF in the owner's zsh before LOGIN.\n"
-        "Next test (openssl speaks TLS; Python does not connect):\n"
-        "  /usr/bin/python3 retrieve_mail_openssl.py --list-only\n"
-        "  /usr/bin/python3 retrieve_mail_openssl.py --max-messages 1",
+        "Custom curl FETCH printed {size} and 0 body bytes in owner zsh.\n"
+        "Python and openssl connect also EBADF there. Next test (native curl UID URL):\n"
+        "  /usr/bin/python3 ~/Desktop/retrieve_mail_applecurl.py --list-only\n"
+        "  /usr/bin/python3 ~/Desktop/retrieve_mail_applecurl.py --max-messages 1",
         file=sys.stderr,
     )
     return 2

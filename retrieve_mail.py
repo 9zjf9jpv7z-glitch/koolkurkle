@@ -73,7 +73,7 @@ def _hard_exit_if_python_314() -> None:
         sys.stderr.write(
             "Python 3.14 on this Mac raises EBADF on IMAP sockets "
             f"(you have {sys.version.split()[0]}).\n"
-            "Use /usr/bin/python3 retrieve_mail_openssl.py instead.\n"
+            "Use /usr/bin/python3 retrieve_mail_applecurl.py instead.\n"
         )
         raise SystemExit(2)
 
