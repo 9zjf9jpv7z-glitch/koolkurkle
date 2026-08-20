@@ -16,11 +16,19 @@ iCloud mail retrieve scripts for kirkbacon@me.com.
 
 A Linux VM is not proof. An agent-process connect is not their Terminal.
 
-In their zsh, generic POSIX `connect()` (Python, LibreSSL openssl) has failed with EBADF. **Apple curl** is the only IMAP TCP that has worked there, and only for LIST/SEARCH-style commands. Custom FETCH does not stream literals.
+In their zsh, generic POSIX `connect()` (Python, LibreSSL openssl) has failed with EBADF. **Apple curl** is the only IMAP TCP that has worked there, and only for LIST/SEARCH-style commands.
+
+No public repo documents this zsh combo (Python + openssl errno 9, Apple curl LIST works). The empty FETCH bodies **do** match documented curl IMAP behavior:
+
+- [curl#18847](https://github.com/curl/curl/issues/18847) — custom `-X UID FETCH` is handled as LIST/SEARCH and historically does not read `{size}` literals (prints the FETCH line and stops). The fix landed in 2025; their `/usr/bin/curl` is **8.7.1 (2024-03-27)**, so that fix is not in this binary.
+- [curl#10076](https://github.com/curl/curl/discussions/10076) — same empty file with `-X FETCH … BODY.PEEK[]`; the URL curl builds itself (`imaps://host/inbox;mailindex=1`, mailbox `;UID=`) downloads the body. PEEK is not in that URL form (`BODY[]`, may set `\Seen`).
+- [curl#8659](https://github.com/curl/curl/pull/8659) / [curl#11671](https://github.com/curl/curl/pull/11671) — `-X` UID FETCH vs URL `;UID=`.
+
+iCloud note (not run in their zsh): [mail-imap-mcp-rs#1](https://github.com/bradsjm/mail-imap-mcp-rs/issues/1) — `FETCH RFC822` empty, `BODY[]` works. Curl’s URL fetch uses `BODY[]`.
 
 ## Next zsh test
 
-`retrieve_mail_applecurl.py` — standalone. IMAP is **`/usr/bin/curl` only**. LIST/SEARCH use the mailbox URL + custom request (already listed 33 folders). Bodies use curl’s **native** IMAP URL `imaps://imap.mail.me.com:993/Folder/;UID=n` — **no** `;PEEK=1`, **no** custom `BODY.PEEK -X`. That native UID URL has **not** been run in their zsh.
+`retrieve_mail_applecurl.py` — standalone. IMAP is **`/usr/bin/curl` only**. LIST/SEARCH stay on the mailbox URL + custom request (33 folders already). Bodies use the documented URL shape `imaps://imap.mail.me.com:993/Archive;UID=n` — **no** `-X FETCH`, **no** `;PEEK=`. That exact URL has **not** been run in their zsh.
 
 Curl’s native fetch uses `BODY[]` and may set `\Seen`. The script reads FLAGS first (line-based, no literal). If the message was unseen, it sends `UID STORE -FLAGS.SILENT (\Seen)` after a successful download. Mail is not moved. Password: `IMAP_APP_PASSWORD` or getpass — never a file, never curl argv.
 
@@ -42,7 +50,7 @@ Output: `~/Desktop/icloud_mail_all.jsonl`.
 
 | File | Role |
 | --- | --- |
-| `retrieve_mail_applecurl.py` | **Next zsh test.** Apple curl native `;UID=` fetch. |
+| `retrieve_mail_applecurl.py` | **Next zsh test.** Apple curl URL `mailbox;UID=` (curl#10076). |
 | `retrieve_mail_openssl.py` | Failed in owner zsh (openssl connect errno 9). |
 | `retrieve_mail_imaplib.py` | Failed in owner zsh (Python EBADF). |
 | `retrieve_mail_curl.py` | Old custom-FETCH path (0-byte bodies). CLI points at applecurl. |

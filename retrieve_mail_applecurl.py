@@ -10,10 +10,12 @@ Owner zsh tonight:
   openssl s_client via retrieve_mail_openssl.py: connect errno 9.
 
 Python does not connect to IMAP. /usr/bin/curl does. LIST/SEARCH stay on
-the mailbox URL + custom request (that path listed folders). Message
-bodies use curl's native IMAP URL with ;UID= and without ;PEEK=1 — the
-FETCH state that writes RFC822 to stdout. That URL has not been run in
-their zsh yet.
+the mailbox URL + custom request (that path listed folders). Bodies use
+the URL curl builds itself (mailbox;UID=n — same shape as
+imaps://host/inbox;mailindex=1 in curl/discussions/10076). Custom -X
+UID FETCH is curl#18847 and will stay empty on Apple 8.7.1 (fix is 2025).
+No ;PEEK= in the URL (not in that form; was curl 3 in their zsh).
+That ;UID= URL has not been run in their zsh.
 
 Password: IMAP_APP_PASSWORD or getpass. Never a file. Never curl argv
 (--user goes in curl -K stdin only).
@@ -158,14 +160,20 @@ def mailbox_url(mailbox: str, host=HOST, port=PORT) -> str:
 
 
 def message_url(mailbox: str, uid: str, style: str, host=HOST, port=PORT) -> str:
-    """Native curl IMAP fetch URL. No ;PEEK=1 (that was curl 3 in their zsh)."""
+    """URL curl builds itself so it enters FETCH state and reads the literal.
+
+    Documented working shape (curl/discussions/10076): mailbox;mailindex=1
+    (semicolon on the mailbox, not a custom -X). Same mechanism: ;UID=n.
+    No ;PEEK= — that parameter is not in this URL form and was curl (3)
+    in their zsh. PEEK=1 landed later; 8.7.1 rejected it.
+    """
     if not str(uid).isdigit():
         raise ValueError("invalid UID %r" % uid)
     base = mailbox_url(mailbox, host=host, port=port)
-    if style == "noslash":
-        url = "%s;UID=%s" % (base, uid)
-    else:
+    if style == "slash":
         url = "%s/;UID=%s" % (base, uid)
+    else:
+        url = "%s;UID=%s" % (base, uid)
     if ";PEEK=" in url:
         raise RuntimeError("internal error: ;PEEK= must not appear in the fetch URL")
     return url
@@ -445,7 +453,7 @@ def fetch_bodies(
     """Return (bodies, style_used). style is slash or noslash."""
     if not uids:
         return [], style
-    styles = [style] if style else ["slash", "noslash"]
+    styles = [style] if style else ["noslash", "slash"]
     last_error = None
     for candidate in styles:
         transfers = [
@@ -511,7 +519,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def retrieve(args: argparse.Namespace) -> int:
     curl_bin = find_curl(args.curl_bin)
     print(
-        "using %s for IMAP (native /;UID=n fetch, no ;PEEK=1, no custom BODY.PEEK -X)"
+        "using %s for IMAP (URL mailbox;UID=n, no -X FETCH, no ;PEEK=)"
         % curl_bin,
         file=sys.stderr,
     )
@@ -547,7 +555,7 @@ def retrieve(args: argparse.Namespace) -> int:
     written = 0
     separator = "=======CURL_IMAP_SEP_%s=======" % uuid.uuid4().hex
     batch_size = max(1, args.batch_size)
-    url_style = "slash"
+    url_style = "noslash"
 
     with output.open(mode, encoding="utf-8") as fh:
         for folder in selectable:

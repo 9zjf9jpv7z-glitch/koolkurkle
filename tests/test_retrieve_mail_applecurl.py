@@ -38,24 +38,26 @@ LIST_SAMPLE = """\
 
 class UrlTests(unittest.TestCase):
     def test_native_uid_url_has_no_peek(self):
-        url = r.message_url("Archive", "96", "slash")
-        self.assertEqual(url, "imaps://imap.mail.me.com:993/Archive/;UID=96")
+        url = r.message_url("Archive", "96", "noslash")
+        self.assertEqual(url, "imaps://imap.mail.me.com:993/Archive;UID=96")
         self.assertNotIn(";PEEK=", url)
-        noslash = r.message_url("Archive", "96", "noslash")
-        self.assertEqual(noslash, "imaps://imap.mail.me.com:993/Archive;UID=96")
-        self.assertNotIn(";PEEK=", noslash)
+        self.assertNotIn("/;UID=", url)
+        slash = r.message_url("Archive", "96", "slash")
+        self.assertEqual(slash, "imaps://imap.mail.me.com:993/Archive/;UID=96")
+        self.assertNotIn(";PEEK=", slash)
 
     def test_body_config_is_native_url_not_custom_fetch(self):
         transfer = {
-            "url": r.message_url("Archive", "96", "slash"),
+            "url": r.message_url("Archive", "96", "noslash"),
             "write_out": "SEP",
         }
         config = r.build_curl_config("kirkbacon@me.com", "x", [transfer])
         url_lines = [line for line in config.splitlines() if line.startswith("url")]
         self.assertTrue(url_lines)
         for line in url_lines:
-            self.assertIn("/;UID=96", line)
+            self.assertIn("Archive;UID=96", line)
             self.assertNotIn(";PEEK=", line)
+            self.assertNotIn("/;UID=", line)
         self.assertNotIn("BODY.PEEK[]", config)
         self.assertNotIn("request =", config)
 
