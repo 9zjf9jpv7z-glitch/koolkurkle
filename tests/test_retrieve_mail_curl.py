@@ -147,101 +147,17 @@ class CurlConfigTests(unittest.TestCase):
         self.assertNotIn("STORE", config)
 
 
-class FakeCurlRetrieveTests(unittest.TestCase):
-    def test_list_and_retrieve_via_fake_curl(self):
-        password = "unit-test-app-password"
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            fake_curl = tmp_path / "fake-curl"
-            fake_curl.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, re, sys\n"
-                "if '--version' in sys.argv:\n"
-                "    sys.stdout.write('curl 8.0.0\\nProtocols: imap imaps\\n')\n"
-                "    raise SystemExit(0)\n"
-                "cfg = sys.stdin.read()\n"
-                "argv_path = pathlib.Path(sys.argv[0]).with_name('argv.txt')\n"
-                "argv_path.write_text('\\0'.join(sys.argv))\n"
-                "cfg_path = pathlib.Path(sys.argv[0]).with_name('last.cfg')\n"
-                "cfg_path.write_text(cfg)\n"
-                "if 'UID SEARCH ALL' in cfg:\n"
-                "    sys.stdout.write('* SEARCH 11\\n')\n"
-                "elif 'UID FETCH 1:*' in cfg:\n"
-                "    sys.stdout.write("
-                + repr(
-                    '* 1 FETCH (UID 11 FLAGS (\\Seen) INTERNALDATE '
-                    '"20-Aug-2026 12:00:00 +0000" RFC822.SIZE 20)\\n'
-                )
-                + ")\n"
-                "elif 'UID FETCH 11 (BODY.PEEK[])' in cfg:\n"
-                "    sys.stdout.write(" + repr(RFC822) + ")\n"
-                "    m = re.search(r'write-out = \"(.*)\"', cfg)\n"
-                "    if m:\n"
-                "        sys.stdout.write(m.group(1))\n"
-                "else:\n"
-                "    sys.stdout.write(" + repr(LIST_SAMPLE) + ")\n"
-                "sys.exit(0)\n",
-                encoding="utf-8",
-            )
-            fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IEXEC)
-
-            env = os.environ.copy()
-            env["IMAP_APP_PASSWORD"] = password
-            env.pop("CURL_BIN", None)
-            out = tmp_path / "icloud_mail_all.jsonl"
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "retrieve_mail_curl.py"),
-                    "--curl-bin",
-                    str(fake_curl),
-                    "--output",
-                    str(out),
-                    "--overwrite",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(tmp_path),
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            argv_text = (tmp_path / "argv.txt").read_text()
-            self.assertNotIn(password, argv_text)
-            self.assertIn("-K", argv_text)
-            cfg = (tmp_path / "last.cfg").read_text()
-            # last transfer is a body fetch; password stays in config only
-            self.assertIn(password, cfg)
-            self.assertIn("UID FETCH 11 (BODY.PEEK[])", cfg)
-            self.assertNotIn("/;UID=", cfg)
-            self.assertNotIn(";PEEK=", cfg)
-
-            lines = [json.loads(line) for line in out.read_text().splitlines() if line]
-            self.assertGreaterEqual(len(lines), 1)
-            rec = next(item for item in lines if item["uid"] == "11")
-            self.assertEqual(rec["folder"], "INBOX")
-            self.assertIn("Hi there", rec["text"])
-            self.assertEqual(rec["flags"], ["\\Seen"])
-
-            # Resume should write zero new rows.
-            proc2 = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "retrieve_mail_curl.py"),
-                    "--curl-bin",
-                    str(fake_curl),
-                    "--output",
-                    str(out),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(tmp_path),
-            )
-            self.assertEqual(proc2.returncode, 0, proc2.stderr)
-            self.assertIn("0 new", proc2.stderr)
-            self.assertEqual(len(out.read_text().splitlines()), len(lines))
+class CurlScriptRedirectTests(unittest.TestCase):
+    def test_cli_points_at_imaplib_retrieve(self):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "retrieve_mail_curl.py"), "--list-only"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("retrieve_mail_imaplib.py", proc.stderr)
+        self.assertIn("/usr/bin/python3", proc.stderr)
 
 
 class LegacyScriptTests(unittest.TestCase):
@@ -300,7 +216,7 @@ class LegacyScriptTests(unittest.TestCase):
         self.assertIn("MailBoxIPv4", source)
         self.assertIn("17.42.251.69", source)
         self.assertIn("3, 14", source)
-        self.assertIn("retrieve_mail_curl.py", source)
+        self.assertIn("retrieve_mail_imaplib.py", source)
         self.assertIn("mark_seen=False", source)
 
 

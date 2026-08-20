@@ -714,7 +714,15 @@ def retrieve(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return retrieve(parse_args(argv))
+    print(
+        "Apple /usr/bin/curl 8.7.1 can LIST folders but does not download FETCH literals.\n"
+        "Use Apple Python (not ~/.venv, not Homebrew):\n"
+        "  /usr/bin/python3 retrieve_mail_imaplib.py --list-only\n"
+        "  /usr/bin/python3 retrieve_mail_imaplib.py --max-messages 1\n"
+        "  /usr/bin/python3 retrieve_mail_imaplib.py",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":
