@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install sqlite-vec (no OpenAI SDK)
+        run: python3 -m pip install -r requirements-embed.txt
+      - name: Unit tests (no network)
+        run: python3 -m unittest discover -s tests -v
+        env:
+          # Prove env override is unused unless a test sets it; keep unset by default.
+          OPENAI_API_KEY: ""
