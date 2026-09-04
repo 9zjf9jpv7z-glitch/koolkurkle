@@ -161,12 +161,20 @@ counts are shard-filtered and log `shard rem/mod`.
 `--max-chars N` embeds only when `len(embed_text(subject, body)) <= N`.
 `--min-chars N` embeds only when that length is `> N`. Length is the same
 CHAR_CAP-truncated payload used for `text_hash`, so a 20k body counts as
-16000. `--max-chars 1000` and `--min-chars 1000` never double-embed:
-length 1000 goes to `--max-chars` only. If both flags are passed on one
-run, `max` must be `> min`. Combines with `--id-mod` / `--id-rem`.
-Dry-run counts include `skipped_too_long` / `skipped_too_short`.
+16000. Combines with `--id-mod` / `--id-rem`. Dry-run counts include
+`skipped_too_long` / `skipped_too_short`.
 
-Mini (short messages, batch 1) then MBP long sweep, same shard:
+**Cross-machine partition (one flag per process, same N):** Mini runs
+`--max-chars 1000` alone; MBP runs `--min-chars 1000` alone. Those two
+invocations never overlap — length 1000 goes to Mini only. Do **not**
+pass both flags on either machine for this split.
+
+**Single run with both flags:** the filters AND (`min < len <= max`).
+`max` must be `> min` or the range is empty and the CLI exits. Equal N
+on one argv is rejected; that is not the partition recipe.
+
+Mini (short messages, batch 1) then MBP long sweep, same shard — two
+separate invocations:
 
 ```bash
 # Mini — shard 1, short only
@@ -192,7 +200,9 @@ Mini (short messages, batch 1) then MBP long sweep, same shard:
 - Idempotent: skip ids that already have an embedding for the same
   `model` + `model_version` and the same `text_hash`. Body edits re-embed.
 - Optional `--max-chars` / `--min-chars` skip payloads outside that
-  window (`skipped_too_long` / `skipped_too_short`).
+  window (`skipped_too_long` / `skipped_too_short`). One flag per
+  process for a same-N split; both on one argv AND and require
+  `max > min`.
 
 ## Dimensions (1024 vs 4096)
 

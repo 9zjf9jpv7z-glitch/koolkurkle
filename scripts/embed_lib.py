@@ -165,9 +165,11 @@ def validate_char_bounds(
 ) -> tuple[int | None, int | None]:
     """Optional length window on ``len(embed_text(...))`` (after CHAR_CAP).
 
-    Either flag may be omitted. When both are set, ``max_chars > min_chars``
-    so ``--max-chars N`` (``len <= N``) and ``--min-chars N`` (``len > N``)
-    stay a clean partition and are never passed together at the same N.
+    Either flag may be omitted. On a **single** call with both set, the
+    filters AND: embed iff ``min_chars < len <= max_chars``, so
+    ``max_chars > min_chars`` is required (equal N is an empty range).
+    Cross-machine partition uses **one** flag per process at the same N
+    (Mini ``--max-chars 1000``; MBP ``--min-chars 1000``).
     """
     if max_chars is None and min_chars is None:
         return None, None
@@ -197,6 +199,7 @@ def char_bound_skip(
     """``'too_long'``, ``'too_short'``, or None if this payload should embed.
 
     ``--max-chars N`` keeps ``n <= N``. ``--min-chars N`` keeps ``n > N``.
+    Both together AND: ``min_chars < n <= max_chars``.
     """
     max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
     if max_chars is not None and n > max_chars:
@@ -741,7 +744,8 @@ def iter_candidates(
     Optional ``id_mod`` / ``id_rem`` keep only ids whose stable hash lands in
     that shard. Optional ``max_chars`` / ``min_chars`` keep only payloads
     whose ``len(embed_text(...))`` (CHAR_CAP first) is ``<= max`` / ``> min``.
-    ``limit`` applies after shard and char filters.
+    Both together AND (``min < len <= max``). ``limit`` applies after
+    shard and char filters.
     """
     id_mod, id_rem = validate_shard(id_mod, id_rem)
     max_chars, min_chars = validate_char_bounds(max_chars, min_chars)

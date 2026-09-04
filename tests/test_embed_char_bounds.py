@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""--max-chars / --min-chars filter + clean partition. No Ollama, no network."""
+"""--max-chars / --min-chars filter + cross-run partition. No Ollama, no network."""
 
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ class ValidateCharBoundsTests(unittest.TestCase):
         self.assertEqual(el.validate_char_bounds(None, 1000), (None, 1000))
         self.assertEqual(el.validate_char_bounds(2000, 1000), (2000, 1000))
 
-    def test_both_require_max_greater_than_min(self):
+    def test_both_on_one_call_require_max_greater_than_min(self):
+        # Single-run AND: min < len <= max. Equal N is an empty range.
         with self.assertRaises(el.EmbedError) as ctx:
             el.validate_char_bounds(1000, 1000)
         self.assertIn("max-chars must be > --min-chars", str(ctx.exception))
@@ -97,7 +98,12 @@ class CharBoundFilterTests(unittest.TestCase):
         self.assertTrue(all(len(row["text"]) > SPLIT for row in el.iter_candidates(conn, min_chars=SPLIT)))
         conn.close()
 
-    def test_max_and_min_1000_never_double_embed(self):
+    def test_separate_invocations_at_1000_are_disjoint_and_cover(self):
+        """Mini --max-chars 1000 alone vs MBP --min-chars 1000 alone.
+
+        Same N on two processes: zero overlap, full cover. Not one argv
+        with both flags (that AND would be empty and is rejected).
+        """
         conn = open_mem()
         lengths = (1, 999, 1000, 1001, 5000)
         for n in lengths:
@@ -121,6 +127,21 @@ class CharBoundFilterTests(unittest.TestCase):
         # Each side's skips are the other side's candidates.
         self.assertEqual(short_counts["skipped_too_long"], long_counts["candidates"])
         self.assertEqual(long_counts["skipped_too_short"], short_counts["candidates"])
+        conn.close()
+
+    def test_single_run_both_flags_ands_the_range(self):
+        conn = open_mem()
+        for n in (500, 1000, 1001, 1500, 2000, 2001):
+            insert_embed_len(conn, f"len-{n}", n)
+        ids = {
+            row["id"]
+            for row in el.iter_candidates(conn, max_chars=2000, min_chars=1000)
+        }
+        self.assertEqual(ids, {"len-1001", "len-1500", "len-2000"})
+        counts = el.candidate_counts(conn, max_chars=2000, min_chars=1000)
+        self.assertEqual(counts["candidates"], 3)
+        self.assertEqual(counts["skipped_too_short"], 2)
+        self.assertEqual(counts["skipped_too_long"], 1)
         conn.close()
 
     def test_length_uses_embed_text_after_char_cap(self):
@@ -250,7 +271,9 @@ class CharBoundCliTests(unittest.TestCase):
         self.assertEqual(both.max_chars, 1000)
         self.assertEqual(both.min_chars, 100)
 
-    def test_cli_rejects_equal_bounds(self):
+    def test_cli_rejects_equal_bounds_on_one_argv(self):
+        # Cross-machine split uses one flag per process. Both at 1000
+        # on one argv is an empty AND range.
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "mailroom.sqlite"
             conn = el.connect_db(db)

@@ -150,8 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Embed only if len(embed_text(subject, body)) <= N. "
             "Length is the same CHAR_CAP-truncated payload used for text_hash. "
-            "With --min-chars N, use --max-chars N on a separate run for a "
-            "clean split (length N is embedded only by --max-chars)."
+            "Cross-machine split: this flag alone here, --min-chars N on the "
+            "other machine (same N; length N is embedded only by --max-chars). "
+            "On one argv with --min-chars, both AND (min < len <= max) and "
+            "max must be > min."
         ),
     )
     parser.add_argument(
@@ -162,7 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Embed only if len(embed_text(subject, body)) > N. "
             "Length is the same CHAR_CAP-truncated payload used for text_hash. "
-            "When both --max-chars and --min-chars are set, max must be > min."
+            "Cross-machine split: this flag alone here, --max-chars N on the "
+            "other machine. On one argv with --max-chars, both AND "
+            "(min < len <= max) and max must be > min (equal N is empty)."
         ),
     )
     return parser
