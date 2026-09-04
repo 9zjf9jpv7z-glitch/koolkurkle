@@ -1,0 +1,6 @@
+# Mailroom semantic search (Mac-local).
+# Install with Homebrew Python — Apple /usr/bin/python3 cannot load SQLite extensions.
+#   /opt/homebrew/bin/python3 -m pip install -r requirements-embed.txt
+#
+# No OpenAI SDK: embeddings use stdlib urllib. Tests never call the live API.
+sqlite-vec>=0.1.6
