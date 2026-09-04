@@ -170,8 +170,10 @@ class CharBoundFilterTests(unittest.TestCase):
             log=long_logs.append,
         )
         self.assertEqual(long_run["embedded"], 1)
-        self.assertEqual(long_run["skipped_too_short"], 1)
-        self.assertTrue(any("skipped_too_short=1" in line for line in long_logs))
+        # The already-embedded short row is not reclassified as too_short.
+        self.assertEqual(long_run["skipped_already_embedded"], 1)
+        self.assertEqual(long_run["skipped_too_short"], 0)
+        self.assertTrue(any("skipped_too_short=0" in line for line in long_logs))
         stored = {
             row[0] for row in conn.execute("SELECT message_id FROM embedding_meta")
         }
