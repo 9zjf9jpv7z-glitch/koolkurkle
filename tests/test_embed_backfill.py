@@ -298,6 +298,8 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("--ollama-url", proc.stdout)
         self.assertIn("--id-mod", proc.stdout)
         self.assertIn("--id-rem", proc.stdout)
+        self.assertIn("--max-chars", proc.stdout)
+        self.assertIn("--min-chars", proc.stdout)
         self.assertIn("qwen3-embedding:8b", proc.stdout)
         self.assertIn("No OpenAI", proc.stdout)
         self.assertNotIn("text-embedding-3-small", proc.stdout)
@@ -312,6 +314,9 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(args.dims, el.DEFAULT_DIMS)
         args = embed_backfill.build_parser().parse_args(["--no-skip-auth"])
         self.assertFalse(args.skip_auth)
+        defaults = embed_backfill.build_parser().parse_args([])
+        self.assertIsNone(defaults.max_chars)
+        self.assertIsNone(defaults.min_chars)
 
 
 if __name__ == "__main__":

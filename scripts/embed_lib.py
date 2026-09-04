@@ -159,6 +159,65 @@ def _shard_sql(
     return f" AND mailroom_in_id_shard({id_expr})"
 
 
+def validate_char_bounds(
+    max_chars: int | None = None,
+    min_chars: int | None = None,
+) -> tuple[int | None, int | None]:
+    """Optional length window on ``len(embed_text(...))`` (after CHAR_CAP).
+
+    Either flag may be omitted. On a **single** call with both set, the
+    filters AND: embed iff ``min_chars < len <= max_chars``, so
+    ``max_chars > min_chars`` is required (equal N is an empty range).
+    Cross-machine partition uses **one** flag per process at the same N
+    (Mini ``--max-chars 1000``; MBP ``--min-chars 1000``).
+    """
+    if max_chars is None and min_chars is None:
+        return None, None
+    parsed_max = int(max_chars) if max_chars is not None else None
+    parsed_min = int(min_chars) if min_chars is not None else None
+    if parsed_max is not None and parsed_max < 0:
+        raise EmbedError(f"--max-chars must be an integer >= 0, got {max_chars}")
+    if parsed_min is not None and parsed_min < 0:
+        raise EmbedError(f"--min-chars must be an integer >= 0, got {min_chars}")
+    if (
+        parsed_max is not None
+        and parsed_min is not None
+        and parsed_max <= parsed_min
+    ):
+        raise EmbedError(
+            "--max-chars must be > --min-chars when both are set "
+            f"(got max_chars={parsed_max} min_chars={parsed_min})"
+        )
+    return parsed_max, parsed_min
+
+
+def char_bound_skip(
+    n: int,
+    max_chars: int | None = None,
+    min_chars: int | None = None,
+) -> str | None:
+    """``'too_long'``, ``'too_short'``, or None if this payload should embed.
+
+    ``--max-chars N`` keeps ``n <= N``. ``--min-chars N`` keeps ``n > N``.
+    Both together AND: ``min_chars < n <= max_chars``.
+    """
+    max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
+    if max_chars is not None and n > max_chars:
+        return "too_long"
+    if min_chars is not None and n <= min_chars:
+        return "too_short"
+    return None
+
+
+def in_char_bounds(
+    n: int,
+    max_chars: int | None = None,
+    min_chars: int | None = None,
+) -> bool:
+    """True when flags are omitted, or the payload length passes both."""
+    return char_bound_skip(n, max_chars, min_chars) is None
+
+
 def model_id(model: str | None) -> str:
     """Stable `embedding_meta.model`. Official 8B Ollama tags → qwen3-embedding-8b."""
     tag = (model or DEFAULT_MODEL).strip().lower()
@@ -531,6 +590,49 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _eligible_embed_rows(
+    conn: sqlite3.Connection,
+    *,
+    model: str,
+    model_version: str,
+    skip_auth: bool,
+    id_mod: int | None,
+    id_rem: int | None,
+) -> list:
+    """Non-empty FTS body, optional skip-auth + shard. Includes already-embedded."""
+    stored = model_id(model)
+    shard = _shard_sql(conn, id_mod, id_rem)
+    if _has_table(conn, "embedding_meta"):
+        sql = f"""
+            SELECT m.id AS id, m.source AS source, m.lane AS lane,
+                   f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
+                   e.text_hash AS existing_hash
+            FROM messages m
+            JOIN messages_fts f ON f.id = m.id
+            LEFT JOIN embedding_meta e
+              ON e.message_id = m.id AND e.model = ? AND e.model_version = ?
+            WHERE TRIM(COALESCE(f.body, '')) != ''
+              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+            {shard}
+            ORDER BY m.id
+        """
+        params: list = [stored, model_version, 1 if skip_auth else 0]
+    else:
+        sql = f"""
+            SELECT m.id AS id, m.source AS source, m.lane AS lane,
+                   f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
+                   NULL AS existing_hash
+            FROM messages m
+            JOIN messages_fts f ON f.id = m.id
+            WHERE TRIM(COALESCE(f.body, '')) != ''
+              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+            {shard}
+            ORDER BY m.id
+        """
+        params = [1 if skip_auth else 0]
+    return list(conn.execute(sql, params).fetchall())
+
+
 def candidate_counts(
     conn: sqlite3.Connection,
     *,
@@ -539,19 +641,22 @@ def candidate_counts(
     skip_auth: bool = True,
     id_mod: int | None = None,
     id_rem: int | None = None,
+    max_chars: int | None = None,
+    min_chars: int | None = None,
 ) -> dict[str, int]:
     """Dry-run stats: auth / empty-body / already-embedded / hash-changed / due.
 
     When ``id_mod`` / ``id_rem`` are set, every count is restricted to that
     shard (``hash(messages.id) % id_mod == id_rem``). Omit both for all rows.
+    ``max_chars`` / ``min_chars`` filter on ``len(embed_text(...))`` after
+    CHAR_CAP and increment ``skipped_too_long`` / ``skipped_too_short``.
     """
     id_mod, id_rem = validate_shard(id_mod, id_rem)
-    stored = model_id(model)
+    max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
         )
-    has_meta = _has_table(conn, "embedding_meta")
     shard = _shard_sql(conn, id_mod, id_rem)
     auth_clause = "LOWER(COALESCE(m.lane, '')) = 'auth'"
     empty_clause = "TRIM(COALESCE(f.body, '')) = ''"
@@ -579,57 +684,40 @@ def candidate_counts(
     ).fetchone()[0]
     already = 0
     hash_changed = 0
-    if has_meta:
-        rows = conn.execute(
-            f"""
-            SELECT m.id, f.subject, f.body, e.text_hash
-            FROM messages m
-            JOIN messages_fts f ON f.id = m.id
-            JOIN embedding_meta e
-              ON e.message_id = m.id AND e.model = ? AND e.model_version = ?
-            WHERE TRIM(COALESCE(f.body, '')) != ''
-              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
-            {shard}
-            """,
-            (stored, model_version, 1 if skip_auth else 0),
-        )
-        for row in rows:
-            payload = embed_text(row["subject"], row["body"])
-            if sha256_text(payload) == row["text_hash"]:
-                already += 1
-            else:
-                hash_changed += 1
-    if has_meta:
-        due = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM messages m
-            JOIN messages_fts f ON f.id = m.id
-            WHERE TRIM(COALESCE(f.body, '')) != ''
-              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
-              AND NOT EXISTS (
-                SELECT 1 FROM embedding_meta e
-                WHERE e.message_id = m.id AND e.model = ? AND e.model_version = ?
-              )
-            {shard}
-            """,
-            (1 if skip_auth else 0, stored, model_version),
-        ).fetchone()[0]
-    else:
-        due = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM messages m
-            JOIN messages_fts f ON f.id = m.id
-            WHERE TRIM(COALESCE(f.body, '')) != ''
-              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
-            {shard}
-            """,
-            (1 if skip_auth else 0,),
-        ).fetchone()[0]
+    due = 0
+    skipped_too_long = 0
+    skipped_too_short = 0
+    for row in _eligible_embed_rows(
+        conn,
+        model=model,
+        model_version=model_version,
+        skip_auth=skip_auth,
+        id_mod=id_mod,
+        id_rem=id_rem,
+    ):
+        payload = embed_text(row["subject"], row["body"])
+        existing = row["existing_hash"]
+        if existing and existing == sha256_text(payload):
+            already += 1
+            continue
+        reason = char_bound_skip(len(payload), max_chars, min_chars)
+        if reason == "too_long":
+            skipped_too_long += 1
+            continue
+        if reason == "too_short":
+            skipped_too_short += 1
+            continue
+        if existing:
+            hash_changed += 1
+        else:
+            due += 1
     out = {
         "joined": int(total),
         "skipped_auth": int(auth) if skip_auth else 0,
         "skipped_empty_body": int(empty),
         "skipped_already_embedded": int(already),
+        "skipped_too_long": int(skipped_too_long),
+        "skipped_too_short": int(skipped_too_short),
         "reembed_hash_changed": int(hash_changed),
         "candidates": int(due) + int(hash_changed),
     }
@@ -648,47 +736,31 @@ def iter_candidates(
     limit: int | None = None,
     id_mod: int | None = None,
     id_rem: int | None = None,
+    max_chars: int | None = None,
+    min_chars: int | None = None,
 ) -> list[dict]:
     """Messages with a non-empty FTS body, not auth, needing (re)embed.
 
     Optional ``id_mod`` / ``id_rem`` keep only ids whose stable hash lands in
-    that shard. ``limit`` applies after the shard filter.
+    that shard. Optional ``max_chars`` / ``min_chars`` keep only payloads
+    whose ``len(embed_text(...))`` (CHAR_CAP first) is ``<= max`` / ``> min``.
+    Both together AND (``min < len <= max``). ``limit`` applies after
+    shard and char filters.
     """
     id_mod, id_rem = validate_shard(id_mod, id_rem)
-    stored = model_id(model)
+    max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
         )
-    shard = _shard_sql(conn, id_mod, id_rem)
-    sql = f"""
-        SELECT m.id AS id, m.source AS source, m.lane AS lane,
-               f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
-               e.text_hash AS existing_hash
-        FROM messages m
-        JOIN messages_fts f ON f.id = m.id
-        LEFT JOIN embedding_meta e
-          ON e.message_id = m.id AND e.model = ? AND e.model_version = ?
-        WHERE TRIM(COALESCE(f.body, '')) != ''
-          AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
-        {shard}
-        ORDER BY m.id
-    """
-    params: list = [stored, model_version, 1 if skip_auth else 0]
-    if not _has_table(conn, "embedding_meta"):
-        sql = f"""
-            SELECT m.id AS id, m.source AS source, m.lane AS lane,
-                   f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
-                   NULL AS existing_hash
-            FROM messages m
-            JOIN messages_fts f ON f.id = m.id
-            WHERE TRIM(COALESCE(f.body, '')) != ''
-              AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
-            {shard}
-            ORDER BY m.id
-        """
-        params = [1 if skip_auth else 0]
-    rows = conn.execute(sql, params).fetchall()
+    rows = _eligible_embed_rows(
+        conn,
+        model=model,
+        model_version=model_version,
+        skip_auth=skip_auth,
+        id_mod=id_mod,
+        id_rem=id_rem,
+    )
     out = []
     for row in rows:
         if not in_id_shard(row["id"], id_mod, id_rem):
@@ -697,6 +769,8 @@ def iter_candidates(
         digest = sha256_text(payload)
         existing = row["existing_hash"]
         if existing and existing == digest:
+            continue
+        if char_bound_skip(len(payload), max_chars, min_chars):
             continue
         out.append(
             {
@@ -772,13 +846,17 @@ def backfill(
     log: Callable[[str], None] | None = None,
     id_mod: int | None = None,
     id_rem: int | None = None,
+    max_chars: int | None = None,
+    min_chars: int | None = None,
 ) -> dict[str, int]:
     """Idempotent embed of FTS-backed messages. Resume-safe (commit per batch).
 
     Dry-run never calls Ollama (or any HTTP). Optional ``id_mod`` / ``id_rem``
-    restrict work to one shard of ``messages.id``.
+    restrict work to one shard of ``messages.id``. Optional ``max_chars`` /
+    ``min_chars`` restrict work by ``len(embed_text(...))`` after CHAR_CAP.
     """
     id_mod, id_rem = validate_shard(id_mod, id_rem)
+    max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
     apply_schema(conn, dims=dims)
     stored = model_id(model)
     counts = candidate_counts(
@@ -788,16 +866,21 @@ def backfill(
         skip_auth=skip_auth,
         id_mod=id_mod,
         id_rem=id_rem,
+        max_chars=max_chars,
+        min_chars=min_chars,
     )
     emit = log or (lambda msg: print(msg, file=sys.stderr))
     emit(
         "backfill {c} candidate(s); skipped_auth={a} skipped_empty_body={e} "
-        "skipped_already_embedded={s} reembed_hash_changed={h} joined={j} "
+        "skipped_already_embedded={s} skipped_too_long={tl} "
+        "skipped_too_short={ts} reembed_hash_changed={h} joined={j} "
         "model={m} dims={d} ollama={u}".format(
             c=counts["candidates"],
             a=counts["skipped_auth"],
             e=counts["skipped_empty_body"],
             s=counts["skipped_already_embedded"],
+            tl=counts["skipped_too_long"],
+            ts=counts["skipped_too_short"],
             h=counts["reembed_hash_changed"],
             j=counts["joined"],
             m=stored,
@@ -811,6 +894,12 @@ def backfill(
             f"joined_in_shard={counts['joined']} "
             f"(stable SHA-1 of messages.id, first 8 bytes, % {id_mod} == {id_rem})"
         )
+    if max_chars is not None or min_chars is not None:
+        emit(
+            f"char filter: max_chars={max_chars} min_chars={min_chars} "
+            f"skipped_too_long={counts['skipped_too_long']} "
+            f"skipped_too_short={counts['skipped_too_short']}"
+        )
     rows = iter_candidates(
         conn,
         model=model,
@@ -819,6 +908,8 @@ def backfill(
         limit=limit,
         id_mod=id_mod,
         id_rem=id_rem,
+        max_chars=max_chars,
+        min_chars=min_chars,
     )
     if dry_run:
         emit(f"dry-run: would embed {len(rows)} row(s) this pass (limit={limit!r})")

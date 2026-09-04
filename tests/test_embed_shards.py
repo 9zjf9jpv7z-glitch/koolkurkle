@@ -113,6 +113,8 @@ class ShardPartitionTests(unittest.TestCase):
                 "skipped_auth": 0,
                 "skipped_empty_body": 0,
                 "skipped_already_embedded": 0,
+                "skipped_too_long": 0,
+                "skipped_too_short": 0,
                 "reembed_hash_changed": 0,
             }
             for rem in range(mod):
