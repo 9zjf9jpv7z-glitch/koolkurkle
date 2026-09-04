@@ -93,6 +93,72 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def validate_shard(
+    id_mod: int | None = None,
+    id_rem: int | None = None,
+) -> tuple[int | None, int | None]:
+    """Require both shard flags together. ``id_mod >= 2`` and ``0 <= id_rem < id_mod``."""
+    if id_mod is None and id_rem is None:
+        return None, None
+    if id_mod is None or id_rem is None:
+        raise EmbedError(
+            "both --id-mod N and --id-rem R are required together "
+            "(omit both to embed all candidates)"
+        )
+    mod = int(id_mod)
+    rem = int(id_rem)
+    if mod < 2:
+        raise EmbedError(f"--id-mod must be an integer >= 2, got {id_mod}")
+    if rem < 0 or rem >= mod:
+        raise EmbedError(f"--id-rem must satisfy 0 <= R < N (N={mod}), got {id_rem}")
+    return mod, rem
+
+
+def message_id_shard_hash(message_id: str) -> int:
+    """Stable 64-bit int from SHA-1(utf-8 ``messages.id``), first 8 bytes big-endian.
+
+    Text / UUID ids shard evenly. Do not parse the id as an integer.
+    """
+    digest = hashlib.sha1(str(message_id).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
+def shard_remainder(message_id: str, id_mod: int) -> int:
+    return message_id_shard_hash(message_id) % int(id_mod)
+
+
+def in_id_shard(
+    message_id: str,
+    id_mod: int | None,
+    id_rem: int | None,
+) -> bool:
+    """True when flags are omitted, or ``hash(id) % id_mod == id_rem``."""
+    id_mod, id_rem = validate_shard(id_mod, id_rem)
+    if id_mod is None:
+        return True
+    return shard_remainder(message_id, id_mod) == id_rem
+
+
+def _shard_sql(
+    conn: sqlite3.Connection,
+    id_mod: int | None,
+    id_rem: int | None,
+    *,
+    id_expr: str = "m.id",
+) -> str:
+    """Extra ``AND …`` clause, or ``""`` when not sharding. Registers a UDF."""
+    id_mod, id_rem = validate_shard(id_mod, id_rem)
+    if id_mod is None:
+        return ""
+    mod, rem = id_mod, id_rem
+
+    def _fn(value: object) -> int:
+        return 1 if shard_remainder(str(value), mod) == rem else 0
+
+    conn.create_function("mailroom_in_id_shard", 1, _fn)
+    return f" AND mailroom_in_id_shard({id_expr})"
+
+
 def model_id(model: str | None) -> str:
     """Stable `embedding_meta.model`. Official 8B Ollama tags → qwen3-embedding-8b."""
     tag = (model or DEFAULT_MODEL).strip().lower()
@@ -471,24 +537,34 @@ def candidate_counts(
     model: str = DEFAULT_MODEL,
     model_version: str = DEFAULT_MODEL_VERSION,
     skip_auth: bool = True,
+    id_mod: int | None = None,
+    id_rem: int | None = None,
 ) -> dict[str, int]:
-    """Dry-run stats: auth / empty-body / already-embedded / hash-changed / due."""
+    """Dry-run stats: auth / empty-body / already-embedded / hash-changed / due.
+
+    When ``id_mod`` / ``id_rem`` are set, every count is restricted to that
+    shard (``hash(messages.id) % id_mod == id_rem``). Omit both for all rows.
+    """
+    id_mod, id_rem = validate_shard(id_mod, id_rem)
     stored = model_id(model)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
         )
     has_meta = _has_table(conn, "embedding_meta")
+    shard = _shard_sql(conn, id_mod, id_rem)
     auth_clause = "LOWER(COALESCE(m.lane, '')) = 'auth'"
     empty_clause = "TRIM(COALESCE(f.body, '')) = ''"
-    total = conn.execute(
-        "SELECT COUNT(*) FROM messages m JOIN messages_fts f ON f.id = m.id"
-    ).fetchone()[0]
+    joined_sql = "SELECT COUNT(*) FROM messages m JOIN messages_fts f ON f.id = m.id"
+    if shard:
+        joined_sql += " WHERE 1=1" + shard
+    total = conn.execute(joined_sql).fetchone()[0]
     auth = conn.execute(
         f"""
         SELECT COUNT(*) FROM messages m
         JOIN messages_fts f ON f.id = m.id
         WHERE {auth_clause}
+        {shard}
         """
     ).fetchone()[0]
     empty = conn.execute(
@@ -497,6 +573,7 @@ def candidate_counts(
         JOIN messages_fts f ON f.id = m.id
         WHERE {empty_clause}
           AND (? = 0 OR NOT ({auth_clause}))
+        {shard}
         """,
         (1 if skip_auth else 0,),
     ).fetchone()[0]
@@ -504,7 +581,7 @@ def candidate_counts(
     hash_changed = 0
     if has_meta:
         rows = conn.execute(
-            """
+            f"""
             SELECT m.id, f.subject, f.body, e.text_hash
             FROM messages m
             JOIN messages_fts f ON f.id = m.id
@@ -512,6 +589,7 @@ def candidate_counts(
               ON e.message_id = m.id AND e.model = ? AND e.model_version = ?
             WHERE TRIM(COALESCE(f.body, '')) != ''
               AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+            {shard}
             """,
             (stored, model_version, 1 if skip_auth else 0),
         )
@@ -523,7 +601,7 @@ def candidate_counts(
                 hash_changed += 1
     if has_meta:
         due = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM messages m
             JOIN messages_fts f ON f.id = m.id
             WHERE TRIM(COALESCE(f.body, '')) != ''
@@ -532,20 +610,22 @@ def candidate_counts(
                 SELECT 1 FROM embedding_meta e
                 WHERE e.message_id = m.id AND e.model = ? AND e.model_version = ?
               )
+            {shard}
             """,
             (1 if skip_auth else 0, stored, model_version),
         ).fetchone()[0]
     else:
         due = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM messages m
             JOIN messages_fts f ON f.id = m.id
             WHERE TRIM(COALESCE(f.body, '')) != ''
               AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+            {shard}
             """,
             (1 if skip_auth else 0,),
         ).fetchone()[0]
-    return {
+    out = {
         "joined": int(total),
         "skipped_auth": int(auth) if skip_auth else 0,
         "skipped_empty_body": int(empty),
@@ -553,6 +633,10 @@ def candidate_counts(
         "reembed_hash_changed": int(hash_changed),
         "candidates": int(due) + int(hash_changed),
     }
+    if id_mod is not None:
+        out["id_mod"] = int(id_mod)
+        out["id_rem"] = int(id_rem)
+    return out
 
 
 def iter_candidates(
@@ -562,14 +646,22 @@ def iter_candidates(
     model_version: str = DEFAULT_MODEL_VERSION,
     skip_auth: bool = True,
     limit: int | None = None,
+    id_mod: int | None = None,
+    id_rem: int | None = None,
 ) -> list[dict]:
-    """Messages with a non-empty FTS body, not auth, needing (re)embed."""
+    """Messages with a non-empty FTS body, not auth, needing (re)embed.
+
+    Optional ``id_mod`` / ``id_rem`` keep only ids whose stable hash lands in
+    that shard. ``limit`` applies after the shard filter.
+    """
+    id_mod, id_rem = validate_shard(id_mod, id_rem)
     stored = model_id(model)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
         )
-    sql = """
+    shard = _shard_sql(conn, id_mod, id_rem)
+    sql = f"""
         SELECT m.id AS id, m.source AS source, m.lane AS lane,
                f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
                e.text_hash AS existing_hash
@@ -579,11 +671,12 @@ def iter_candidates(
           ON e.message_id = m.id AND e.model = ? AND e.model_version = ?
         WHERE TRIM(COALESCE(f.body, '')) != ''
           AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+        {shard}
         ORDER BY m.id
     """
     params: list = [stored, model_version, 1 if skip_auth else 0]
     if not _has_table(conn, "embedding_meta"):
-        sql = """
+        sql = f"""
             SELECT m.id AS id, m.source AS source, m.lane AS lane,
                    f.subject AS subject, f.body AS body, f.from_addr AS from_addr,
                    NULL AS existing_hash
@@ -591,12 +684,15 @@ def iter_candidates(
             JOIN messages_fts f ON f.id = m.id
             WHERE TRIM(COALESCE(f.body, '')) != ''
               AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
+            {shard}
             ORDER BY m.id
         """
         params = [1 if skip_auth else 0]
     rows = conn.execute(sql, params).fetchall()
     out = []
     for row in rows:
+        if not in_id_shard(row["id"], id_mod, id_rem):
+            continue
         payload = embed_text(row["subject"], row["body"])
         digest = sha256_text(payload)
         existing = row["existing_hash"]
@@ -674,15 +770,24 @@ def backfill(
     dims: int = DEFAULT_DIMS,
     embed_fn: EmbedFn | None = None,
     log: Callable[[str], None] | None = None,
+    id_mod: int | None = None,
+    id_rem: int | None = None,
 ) -> dict[str, int]:
     """Idempotent embed of FTS-backed messages. Resume-safe (commit per batch).
 
-    Dry-run never calls Ollama (or any HTTP).
+    Dry-run never calls Ollama (or any HTTP). Optional ``id_mod`` / ``id_rem``
+    restrict work to one shard of ``messages.id``.
     """
+    id_mod, id_rem = validate_shard(id_mod, id_rem)
     apply_schema(conn, dims=dims)
     stored = model_id(model)
     counts = candidate_counts(
-        conn, model=model, model_version=model_version, skip_auth=skip_auth
+        conn,
+        model=model,
+        model_version=model_version,
+        skip_auth=skip_auth,
+        id_mod=id_mod,
+        id_rem=id_rem,
     )
     emit = log or (lambda msg: print(msg, file=sys.stderr))
     emit(
@@ -700,12 +805,20 @@ def backfill(
             u=ollama_url,
         )
     )
+    if id_mod is not None:
+        emit(
+            f"shard {id_rem}/{id_mod}: candidates in shard={counts['candidates']} "
+            f"joined_in_shard={counts['joined']} "
+            f"(stable SHA-1 of messages.id, first 8 bytes, % {id_mod} == {id_rem})"
+        )
     rows = iter_candidates(
         conn,
         model=model,
         model_version=model_version,
         skip_auth=skip_auth,
         limit=limit,
+        id_mod=id_mod,
+        id_rem=id_rem,
     )
     if dry_run:
         emit(f"dry-run: would embed {len(rows)} row(s) this pass (limit={limit!r})")
@@ -756,6 +869,198 @@ def backfill(
         emit(f"committed {embedded}/{len(rows)}")
     counts["embedded"] = embedded
     counts["would_embed"] = 0
+    return counts
+
+
+def vec_declared_dims(conn: sqlite3.Connection) -> int | None:
+    """Declared ``float[N]`` on ``message_embeddings``, or None if missing."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'message_embeddings'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return None
+    match = re.search(r"float\[(\d+)\]", row[0])
+    return int(match.group(1)) if match else None
+
+
+def _embedding_blob(conn: sqlite3.Connection, message_id: str) -> bytes | None:
+    row = conn.execute(
+        "SELECT embedding FROM message_embeddings WHERE message_id = ?",
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    blob = row[0] if not isinstance(row, sqlite3.Row) else row["embedding"]
+    if blob is None:
+        return None
+    return bytes(blob)
+
+
+def merge_shards(
+    primary: sqlite3.Connection,
+    secondary: sqlite3.Connection,
+    *,
+    model: str = DEFAULT_MODEL,
+    model_version: str = DEFAULT_MODEL_VERSION,
+    dry_run: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, int]:
+    """Copy missing embed rows from ``secondary`` into ``primary``.
+
+    Missing-only: a primary ``embedding_meta`` row for the same
+    ``(message_id, model, model_version)`` is left untouched, even if
+    ``text_hash`` differs. Never deletes primary rows. Never writes
+    ``messages`` / FTS. Never calls Ollama or IMAP.
+
+    Idempotent: a second run reports ``skipped_already_present`` for every
+    previously copied id.
+    """
+    emit = log or (lambda msg: print(msg, file=sys.stderr))
+    stored = model_id(model)
+    if not _has_table(secondary, "embedding_meta") or not _has_table(
+        secondary, "message_embeddings"
+    ):
+        raise EmbedError(
+            "secondary DB is missing embedding_meta / message_embeddings. "
+            "Run embed_backfill.py on the copy first."
+        )
+    sec_dims = vec_declared_dims(secondary)
+    pri_dims = vec_declared_dims(primary)
+    if sec_dims is None:
+        raise EmbedError("secondary message_embeddings has no declared float[N] dims")
+    if pri_dims is None:
+        apply_schema(primary, dims=sec_dims)
+        pri_dims = vec_declared_dims(primary)
+    if pri_dims != sec_dims:
+        raise EmbedError(
+            f"dims mismatch: primary message_embeddings is float[{pri_dims}], "
+            f"secondary is float[{sec_dims}]. Same model / CHAR_CAP / --dims "
+            "required on both machines; do not change mid-corpus."
+        )
+    _ensure_meta_dims_column(primary, pri_dims)
+    _ensure_meta_dims_column(secondary, sec_dims)
+
+    dim_rows = secondary.execute(
+        """
+        SELECT DISTINCT dims FROM embedding_meta
+        WHERE model = ? AND model_version = ?
+        """,
+        (stored, model_version),
+    ).fetchall()
+    sec_meta_dims = {int(row[0]) for row in dim_rows if row[0] is not None}
+    if sec_meta_dims and sec_meta_dims != {int(sec_dims)}:
+        raise EmbedError(
+            f"secondary embedding_meta.dims {sorted(sec_meta_dims)} "
+            f"!= table float[{sec_dims}] for model={stored} version={model_version}"
+        )
+
+    rows = secondary.execute(
+        """
+        SELECT message_id, model, model_version, created_at, text_hash, char_count, dims
+        FROM embedding_meta
+        WHERE model = ? AND model_version = ?
+        ORDER BY message_id
+        """,
+        (stored, model_version),
+    ).fetchall()
+
+    examined = 0
+    inserted = 0
+    skipped_already_present = 0
+    missing_vector = 0
+    errors = 0
+
+    emit(
+        f"merge secondary → primary model={stored} version={model_version} "
+        f"dims={sec_dims} examined_source_rows={len(rows)}"
+        + (" dry-run" if dry_run else "")
+    )
+
+    try:
+        for row in rows:
+            examined += 1
+            message_id = row["message_id"]
+            try:
+                exists = primary.execute(
+                    """
+                    SELECT 1 FROM embedding_meta
+                    WHERE message_id = ? AND model = ? AND model_version = ?
+                    """,
+                    (message_id, stored, model_version),
+                ).fetchone()
+                if exists:
+                    skipped_already_present += 1
+                    continue
+                blob = _embedding_blob(secondary, message_id)
+                if blob is None:
+                    missing_vector += 1
+                    emit(f"missing_vector on secondary: {message_id}")
+                    continue
+                expected_bytes = int(sec_dims) * 4
+                if len(blob) != expected_bytes:
+                    errors += 1
+                    emit(
+                        f"error {message_id}: vector is {len(blob)} bytes, "
+                        f"expected {expected_bytes} for dims={sec_dims}"
+                    )
+                    continue
+                if dry_run:
+                    inserted += 1
+                    continue
+                has_vec = primary.execute(
+                    "SELECT 1 FROM message_embeddings WHERE message_id = ?",
+                    (message_id,),
+                ).fetchone()
+                if has_vec is None:
+                    primary.execute(
+                        "INSERT INTO message_embeddings(message_id, embedding) "
+                        "VALUES (?, ?)",
+                        (message_id, blob),
+                    )
+                primary.execute(
+                    """
+                    INSERT INTO embedding_meta(
+                      message_id, model, model_version, created_at,
+                      text_hash, char_count, dims
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(message_id, model, model_version) DO NOTHING
+                    """,
+                    (
+                        message_id,
+                        stored,
+                        model_version,
+                        row["created_at"],
+                        row["text_hash"],
+                        row["char_count"],
+                        int(row["dims"] if row["dims"] is not None else sec_dims),
+                    ),
+                )
+                inserted += 1
+            except (sqlite3.Error, EmbedError, TypeError, ValueError) as exc:
+                errors += 1
+                emit(f"error {message_id}: {exc}")
+        if not dry_run:
+            primary.commit()
+    except Exception:
+        if not dry_run:
+            primary.rollback()
+        raise
+
+    counts = {
+        "examined": examined,
+        "inserted": inserted,
+        "skipped_already_present": skipped_already_present,
+        "missing_vector": missing_vector,
+        "errors": errors,
+    }
+    emit(
+        "merge {verb}: examined={examined} inserted={inserted} "
+        "skipped_already_present={skipped_already_present} "
+        "missing_vector={missing_vector} errors={errors}".format(
+            verb="dry-run would insert" if dry_run else "committed",
+            **counts,
+        )
+    )
     return counts
 
 

@@ -91,6 +91,9 @@ Embed (resume-safe; `--limit` for a slice). Requires local Ollama with
 /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite
 ```
 
+Two machines can split the ~63k-message job — see **Split across two Macs**
+below. `--id-mod` / `--id-rem` omitted keeps today's "all candidates" behavior.
+
 One-liner search after backfill (embeds the query locally):
 
 ```bash
@@ -104,6 +107,54 @@ schedule it, and then only localhost:
 # crontab example — 8:15pm local, 200 msgs/night
 15 20 * * * /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py --db ~/MailArchive/mailroom.sqlite --limit 200
 ```
+
+## Split across two Macs
+
+Do **not** mount one live `mailroom.sqlite` over SMB/NFS and let two writers
+hit it. SQLite will corrupt. Keep the canonical file on the MacBook Pro;
+the Mac mini embeds a **copy**, then you merge only new embed rows back.
+
+Same model, stored dims, and `CHAR_CAP` / `model_version` on both machines.
+Do not change those mid-corpus.
+
+1. **MBP (primary)** — canonical DB is `~/MailArchive/mailroom.sqlite`.
+   Leave any LaunchAgent / cron on this machine, or run shard 0 yourself.
+2. **Copy** the DB (and `scripts/`) to the mini via AirDrop, rsync, or USB.
+   On the mini: install Ollama, `ollama pull qwen3-embedding:8b`, Homebrew
+   Python, and `pip install sqlite-vec` (same as **Install** above).
+3. **MBP** — shard 0 of 2 (resume-safe; skip auth + already-embedded):
+
+   ```bash
+   /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py \
+     --db ~/MailArchive/mailroom.sqlite --id-mod 2 --id-rem 0
+   ```
+
+4. **Mini (M4, 24 GB)** — shard 1 of 2 against the **copy** only:
+
+   ```bash
+   /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py \
+     --db ~/MailArchive/mailroom-copy.sqlite --id-mod 2 --id-rem 1
+   ```
+
+5. When the mini finishes, copy its DB back to the MBP (or run merge with
+   both files local). Missing-only: rows already on the primary
+   (`embedding_meta` for this model + version) are left alone, even if
+   `text_hash` differs. Nothing deletes primary rows; FTS / message bodies
+   are not touched; Ollama is not called.
+
+   ```bash
+   /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_merge_shards.py \
+     --primary-db ~/MailArchive/mailroom.sqlite \
+     --secondary-db ~/MailArchive/mailroom-mini.sqlite
+   ```
+
+   Dry-run first: add `--dry-run`. Re-running the merge is idempotent
+   (`skipped_already_present`).
+
+`--id-mod N` / `--id-rem R` must be passed together (`N >= 2`,
+`0 <= R < N`). The shard is `SHA-1(utf-8 messages.id)` (first 8 bytes as
+an unsigned int) `% N == R`, so UUID / text ids split evenly. Dry-run
+counts are shard-filtered and log `shard rem/mod`.
 
 ## What gets embedded
 

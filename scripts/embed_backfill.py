@@ -9,6 +9,7 @@ Mac (Homebrew Python — Apple /usr/bin/python3 cannot load extensions):
 
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --dry-run
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --limit 200
+  /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --id-mod 2 --id-rem 0
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from embed_lib import (
     backfill,
     connect_db,
     default_db_path,
+    validate_shard,
 )
 
 
@@ -117,6 +119,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to vec0.dylib / vec0.so if pip sqlite-vec is not installed.",
     )
+    parser.add_argument(
+        "--id-mod",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Split the corpus into N shards (N >= 2). Include a candidate "
+            "only if a stable SHA-1 of messages.id satisfies hash %% N == R. "
+            "Must be passed together with --id-rem. Omit both to embed all."
+        ),
+    )
+    parser.add_argument(
+        "--id-rem",
+        type=int,
+        default=None,
+        metavar="R",
+        help=(
+            "Shard remainder R (0 <= R < N). With --id-mod 2, MBP uses "
+            "--id-rem 0 and the Mac mini copy uses --id-rem 1."
+        ),
+    )
     return parser
 
 
@@ -124,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db = Path(args.db).expanduser()
     try:
+        id_mod, id_rem = validate_shard(args.id_mod, args.id_rem)
         conn = connect_db(db, args.vec_extension)
         try:
             apply_schema(conn, dims=args.dims)
@@ -137,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 ollama_url=args.ollama_url,
                 dims=args.dims,
+                id_mod=id_mod,
+                id_rem=id_rem,
             )
         finally:
             conn.close()

@@ -296,6 +296,8 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("--batch-size", proc.stdout)
         self.assertIn("--model", proc.stdout)
         self.assertIn("--ollama-url", proc.stdout)
+        self.assertIn("--id-mod", proc.stdout)
+        self.assertIn("--id-rem", proc.stdout)
         self.assertIn("qwen3-embedding:8b", proc.stdout)
         self.assertIn("No OpenAI", proc.stdout)
         self.assertNotIn("text-embedding-3-small", proc.stdout)

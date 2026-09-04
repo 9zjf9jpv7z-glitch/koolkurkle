@@ -32,6 +32,10 @@ ollama pull qwen3-embedding:8b
 # backfill when Ollama is serving the model locally
 /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py --db ~/MailArchive/mailroom.sqlite --limit 200
 
+# optional: split ~63k messages across two Macs (MBP shard 0, mini copy shard 1)
+# see scripts/README.md — never dual-write one sqlite over SMB/NFS
+# /opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py --db ~/MailArchive/mailroom.sqlite --id-mod 2 --id-rem 0
+
 # search after backfill (embeds the query on localhost)
 /opt/homebrew/bin/python3 ~/MailArchive/scripts/semantic_search.py --db ~/MailArchive/mailroom.sqlite --k 10 'receipt from apple'
 ```
