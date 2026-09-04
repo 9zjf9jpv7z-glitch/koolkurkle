@@ -1,0 +1,7 @@
+# Mailroom semantic search (Mac-local, Ollama).
+# Install with Homebrew Python — Apple /usr/bin/python3 cannot load SQLite extensions.
+#   /opt/homebrew/bin/python3 -m pip install -r requirements-embed.txt
+#
+# No OpenAI SDK. Embeddings use stdlib urllib against local Ollama
+# (http://127.0.0.1:11434/api/embed). Tests mock HTTP; they never pull a model.
+sqlite-vec>=0.1.6

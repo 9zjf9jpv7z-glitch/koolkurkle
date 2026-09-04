@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+.env
+.DS_Store
+.python-version
+*.eml
+.coverage
+htmlcov/
