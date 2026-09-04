@@ -606,8 +606,10 @@ PAGE_HTML = r"""<!DOCTYPE html>
     letter-spacing: 0.08em;
   }
   @media (max-width: 900px) {
-    main.dual { grid-template-columns: 1fr; }
-    .rate { font-size: clamp(4rem, 18vw, 7rem); }
+    main.dual { grid-template-columns: minmax(0, 1fr); }
+    .rate, main.dual .rate { font-size: clamp(4rem, 18vw, 7rem); }
+    .meta { grid-template-columns: 1fr 1fr; }
+    .meta .cell:first-child { grid-column: 1 / -1; }
   }
 </style>
 </head>
