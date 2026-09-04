@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Shared Mailroom embedding + sqlite-vec helpers.
 
-Copy this file next to embed_backfill.py / semantic_search.py /
-mailroom_tools.py (repo `scripts/` or `~/MailArchive/scripts/`).
+Local Ollama Qwen3-Embedding-8B (no OpenAI). Copy this file next to
+embed_backfill.py / semantic_search.py / mailroom_tools.py (repo
+`scripts/` or `~/MailArchive/scripts/`).
 
-Never logs API keys. No IMAP. Does not rewrite FTS ingest.
+Never calls a cloud API. No IMAP. Does not rewrite FTS ingest.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import sqlite3
 import struct
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -23,28 +25,31 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 DEFAULT_DB = Path.home() / "MailArchive" / "mailroom.sqlite"
-DEFAULT_MODEL = "text-embedding-3-small"
+# Official Ollama library tag: https://ollama.com/library/qwen3-embedding:8b
+# (`qwen3-embedding` / `qwen3-embedding:latest` is the same 8B Q4_K_M).
+DEFAULT_MODEL = "qwen3-embedding:8b"
+DEFAULT_MODEL_ID = "qwen3-embedding-8b"
 DEFAULT_MODEL_VERSION = "v1"
-DEFAULT_DIMS = 1536
+# Native Qwen3-Embedding-8B output is 4096-d. v1 stores a Matryoshka
+# prefix of 1024-d (L2-renormalized) so each row is 4 KiB instead of 16 KiB.
+# The model is trained for this; see scripts/README.md.
+NATIVE_DIMS = 4096
+DEFAULT_DIMS = 1024
 DEFAULT_K = 10
-DEFAULT_BATCH_SIZE = 64
-# v1: first N chars of `subject + "\\n\\n" + body`. ~6k tokens at 4 chars/token.
-# text-embedding-3-small max input is 8191 tokens; 24000 chars stays under that.
-CHAR_CAP = 24000
+# Local 8B on Apple Silicon: small batches keep Metal/RAM steady.
+DEFAULT_BATCH_SIZE = 8
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+# v1: first N chars of `subject + "\\n\\n" + body`. ~4k tokens at 4 chars/token,
+# well under the model's 32k context, and faster for local 8B backfill.
+CHAR_CAP = 16000
 SNIPPET_CHARS = 180
-OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+# Qwen3-Embedding retrieval: instruct prefix on *queries* only (not documents).
+QUERY_INSTRUCT = (
+    "Instruct: Given a mail search query, retrieve the most relevant email.\n"
+    "Query: "
+)
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "embed_schema.sql"
-
-# Preferred first. Scripts try each pair; fail clearly if none exist.
-# `security … -w` must be last (macOS Tahoe).
-KEYCHAIN_CANDIDATES = (
-    ("openai-api-key", "koolkurkle"),
-    ("OpenAI API Key", "koolkurkle"),
-    ("OpenAI", "api-key"),
-    ("openai", "OPENAI_API_KEY"),
-    ("com.openai.api", "koolkurkle"),
-)
 
 # Homebrew / release dylibs on Apple Silicon, then Intel.
 VEC_EXTENSION_CANDIDATES = (
@@ -55,7 +60,17 @@ VEC_EXTENSION_CANDIDATES = (
     "/usr/local/lib/vec0.dylib",
 )
 
-EmbedFn = Callable[[Sequence[str], str, str], list[list[float]]]
+# Official 8B aliases collapse to one stored id so pull-tag variants match.
+_QWEN3_8B_ALIASES = frozenset(
+    {
+        "qwen3-embedding:8b",
+        "qwen3-embedding",
+        "qwen3-embedding:latest",
+        "qwen3-embedding-8b",
+    }
+)
+
+EmbedFn = Callable[[Sequence[str], str], list[list[float]]]
 
 
 class EmbedError(RuntimeError):
@@ -78,8 +93,26 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def model_id(model: str | None) -> str:
+    """Stable `embedding_meta.model`. Official 8B Ollama tags → qwen3-embedding-8b."""
+    tag = (model or DEFAULT_MODEL).strip().lower()
+    if tag in _QWEN3_8B_ALIASES:
+        return DEFAULT_MODEL_ID
+    return tag.replace(":", "-")
+
+
+def ollama_model_tag(model: str | None) -> str:
+    """Tag sent to Ollama. Stored id `qwen3-embedding-8b` maps back to `:8b`."""
+    tag = (model or DEFAULT_MODEL).strip()
+    if not tag:
+        return DEFAULT_MODEL
+    if tag.lower() == DEFAULT_MODEL_ID:
+        return DEFAULT_MODEL
+    return tag
+
+
 def embed_text(subject: str | None, body: str | None, cap: int = CHAR_CAP) -> str:
-    """v1 payload: first `cap` chars of subject + blank line + FTS body."""
+    """v1 document payload: first `cap` chars of subject + blank line + FTS body."""
     subj = (subject or "").strip()
     body_text = (body or "").strip()
     if subj and body_text:
@@ -91,6 +124,11 @@ def embed_text(subject: str | None, body: str | None, cap: int = CHAR_CAP) -> st
     return raw
 
 
+def query_text(query: str) -> str:
+    """v1 search payload: Qwen3 instruct prefix + stripped query."""
+    return QUERY_INSTRUCT + (query or "").strip()
+
+
 def snippet(body: str | None, n: int = SNIPPET_CHARS) -> str:
     collapsed = " ".join((body or "").split())
     if len(collapsed) <= n:
@@ -98,115 +136,177 @@ def snippet(body: str | None, n: int = SNIPPET_CHARS) -> str:
     return collapsed[: n - 1] + "…"
 
 
-def _redact_headers(headers: dict) -> dict:
-    out = {}
-    for key, value in headers.items():
-        if key.lower() in {"authorization", "api-key", "x-api-key"}:
-            out[key] = "<redacted>"
-        else:
-            out[key] = value
-    return out
+def l2_normalize(vector: Sequence[float]) -> list[float]:
+    norm = math.sqrt(sum(float(x) * float(x) for x in vector))
+    if norm == 0.0:
+        raise EmbedError(
+            "Ollama returned a zero embedding. Pull/update the model: "
+            f"`ollama pull {DEFAULT_MODEL}` (and prefer POST /api/embed, not "
+            "the deprecated /api/embeddings)."
+        )
+    return [float(x) / norm for x in vector]
 
 
-def read_openai_api_key(
+def adapt_dims(vector: Sequence[float], dims: int) -> list[float]:
+    """Keep native length, or Matryoshka-truncate + L2-renormalize."""
+    if dims <= 0:
+        raise EmbedError(f"dims must be > 0, got {dims}")
+    if len(vector) == dims:
+        return [float(x) for x in vector]
+    if len(vector) < dims:
+        raise EmbedError(
+            f"Embedding dim {len(vector)} < requested {dims}. "
+            f"{DEFAULT_MODEL} native is {NATIVE_DIMS}."
+        )
+    return l2_normalize(vector[:dims])
+
+
+def _join_url(base: str, path: str) -> str:
+    return base.rstrip("/") + path
+
+
+def _post_json(
+    url: str,
+    payload: dict,
     *,
-    allow_env: bool = True,
-    security_bin: str = "security",
-    run: Callable[..., subprocess.CompletedProcess] | None = None,
-) -> str:
-    """Key from OPENAI_API_KEY (tests/override) or macOS Keychain.
-
-    Never prints or logs the secret. `security find-generic-password … -w`
-    keeps `-w` last (Tahoe).
-    """
-    if allow_env:
-        env = (os.environ.get("OPENAI_API_KEY") or "").strip()
-        if env:
-            return env
-
-    runner = run or subprocess.run
-    tried = []
-    for service, account in KEYCHAIN_CANDIDATES:
-        tried.append(f"service={service!r} account={account!r}")
-        cmd = [
-            security_bin,
-            "find-generic-password",
-            "-s",
-            service,
-            "-a",
-            account,
-            "-w",
-        ]
-        try:
-            result = runner(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise EmbedError(
-                "macOS `security` not found. On this Mac, add the key with "
-                "`security add-generic-password` (see scripts/README.md) or set "
-                "OPENAI_API_KEY for a one-off test."
-            ) from exc
-        if result.returncode == 0:
-            key = (result.stdout or "").strip()
-            if key:
-                return key
-    names = "; ".join(tried)
-    raise EmbedError(
-        "OpenAI API key not found in the environment or Keychain. "
-        "Preferred item: service=openai-api-key account=koolkurkle. "
-        f"Also tried: {names}. "
-        "Add it with `security add-generic-password -a koolkurkle "
-        "-s openai-api-key -w` (`-w` must be last on Tahoe), "
-        "or set OPENAI_API_KEY for tests only."
+    opener: Callable[..., object] | None,
+    timeout: int,
+) -> tuple[int, bytes]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-
-
-def openai_embed_batch(
-    texts: Sequence[str],
-    model: str,
-    api_key: str,
-    *,
-    url: str = OPENAI_EMBEDDINGS_URL,
-    opener: Callable[..., object] | None = None,
-    timeout: int = 120,
-) -> list[list[float]]:
-    """POST /v1/embeddings via stdlib urllib. Does not log the API key."""
-    if not texts:
-        return []
-    payload = json.dumps({"model": model, "input": list(texts)}).encode("utf-8")
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     open_url = opener or urllib.request.urlopen
     try:
         with open_url(request, timeout=timeout) as resp:
             raw = resp.read()
+            status = getattr(resp, "status", None) or getattr(resp, "code", 200)
+            return int(status), raw
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise EmbedError(
-            f"OpenAI embeddings HTTP {exc.code}: {body} "
-            f"(headers={_redact_headers(dict(request.headers))})"
-        ) from None
+        err_body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise EmbedError(f"Ollama embeddings HTTP {exc.code} at {url}: {err_body}") from None
     except urllib.error.URLError as exc:
-        raise EmbedError(f"OpenAI embeddings network error: {exc.reason!r}") from None
-    data = json.loads(raw.decode("utf-8"))
+        reason = getattr(exc, "reason", exc)
+        raise EmbedError(
+            f"Cannot reach Ollama at {url} ({reason!r}). "
+            f"Start it locally (`brew services start ollama` or `ollama serve`) "
+            f"and pull the model once: `ollama pull {DEFAULT_MODEL}`. "
+            "After the pull, backfill and search stay offline."
+        ) from None
+
+
+def _parse_ollama_native(data: object, n_texts: int) -> list[list[float]] | None:
+    if not isinstance(data, dict):
+        return None
+    embeddings = data.get("embeddings")
+    if isinstance(embeddings, list) and embeddings:
+        if len(embeddings) != n_texts:
+            raise EmbedError(
+                f"Ollama /api/embed returned {len(embeddings)} vectors, expected {n_texts}."
+            )
+        out = []
+        for row in embeddings:
+            if not isinstance(row, list) or not row:
+                raise EmbedError("Ollama /api/embed row missing embedding.")
+            out.append([float(x) for x in row])
+        return out
+    single = data.get("embedding")
+    if isinstance(single, list) and single and n_texts == 1:
+        return [[float(x) for x in single]]
+    return None
+
+
+def _parse_openai_compat(data: object, n_texts: int) -> list[list[float]] | None:
+    if not isinstance(data, dict):
+        return None
     items = data.get("data")
-    if not isinstance(items, list) or len(items) != len(texts):
-        raise EmbedError("OpenAI embeddings response missing data[] of expected length.")
+    if not isinstance(items, list) or not items:
+        return None
+    if len(items) != n_texts:
+        raise EmbedError(
+            f"Ollama /v1/embeddings returned {len(items)} vectors, expected {n_texts}."
+        )
     items = sorted(items, key=lambda row: int(row.get("index", 0)))
-    vectors = []
+    out = []
     for row in items:
         vec = row.get("embedding")
         if not isinstance(vec, list) or not vec:
-            raise EmbedError("OpenAI embeddings response row missing embedding.")
-        vectors.append([float(x) for x in vec])
-    return vectors
+            raise EmbedError("Ollama /v1/embeddings row missing embedding.")
+        out.append([float(x) for x in vec])
+    return out
+
+
+def ollama_embed_batch(
+    texts: Sequence[str],
+    model: str,
+    *,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    dims: int = DEFAULT_DIMS,
+    opener: Callable[..., object] | None = None,
+    timeout: int = 300,
+) -> list[list[float]]:
+    """Embed via local Ollama. Prefers POST /api/embed; falls back to /v1/embeddings.
+
+    No API key. Does not call api.openai.com. After `ollama pull`, this is offline.
+    """
+    if not texts:
+        return []
+    tag = ollama_model_tag(model)
+    base = ollama_url.rstrip("/")
+    native_payload = {
+        "model": tag,
+        "input": list(texts),
+        "keep_alive": "30m",
+        "dimensions": int(dims),
+    }
+    raw = None
+    parsed = None
+    try:
+        _status, raw = _post_json(
+            _join_url(base, "/api/embed"),
+            native_payload,
+            opener=opener,
+            timeout=timeout,
+        )
+        parsed = _parse_ollama_native(json.loads(raw.decode("utf-8")), len(texts))
+    except EmbedError as exc:
+        msg = str(exc)
+        # 404: older builds only expose the OpenAI-compatible route.
+        if "HTTP 404" not in msg:
+            raise
+        parsed = None
+    if parsed is None:
+        compat_payload = {
+            "model": tag,
+            "input": list(texts),
+            "dimensions": int(dims),
+        }
+        _status, raw = _post_json(
+            _join_url(base, "/v1/embeddings"),
+            compat_payload,
+            opener=opener,
+            timeout=timeout,
+        )
+        parsed = _parse_openai_compat(json.loads(raw.decode("utf-8")), len(texts))
+    if parsed is None:
+        raise EmbedError(
+            "Ollama embeddings response missing embeddings[] / data[]. "
+            f"Is `{tag}` pulled? `ollama pull {DEFAULT_MODEL}`"
+        )
+    return [adapt_dims(vec, dims) for vec in parsed]
+
+
+def make_ollama_embed_fn(
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    dims: int = DEFAULT_DIMS,
+) -> EmbedFn:
+    def _embed(texts: Sequence[str], model: str) -> list[list[float]]:
+        return ollama_embed_batch(texts, model, ollama_url=ollama_url, dims=dims)
+
+    return _embed
 
 
 def _try_load_path(conn: sqlite3.Connection, path: str) -> bool:
@@ -278,11 +378,50 @@ def connect_db(db_path: str | Path, extension_path: str | None = None) -> sqlite
     return conn
 
 
-def apply_schema(conn: sqlite3.Connection, schema_sql: str | None = None) -> None:
-    sql = schema_sql
-    if sql is None:
-        sql = SCHEMA_PATH.read_text(encoding="utf-8")
+def schema_sql(dims: int = DEFAULT_DIMS) -> str:
+    sql = SCHEMA_PATH.read_text(encoding="utf-8")
+    sql = re.sub(r"float\[\d+\]", f"float[{int(dims)}]", sql)
+    sql = re.sub(
+        r"dims INTEGER NOT NULL DEFAULT \d+",
+        f"dims INTEGER NOT NULL DEFAULT {int(dims)}",
+        sql,
+    )
+    return sql
+
+
+def _ensure_meta_dims_column(conn: sqlite3.Connection, dims: int) -> None:
+    if not _has_table(conn, "embedding_meta"):
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(embedding_meta)")}
+    if "dims" not in cols:
+        conn.execute(
+            f"ALTER TABLE embedding_meta ADD COLUMN dims INTEGER NOT NULL DEFAULT {int(dims)}"
+        )
+
+
+def _assert_vec_dims(conn: sqlite3.Connection, dims: int) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'message_embeddings'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return
+    if f"float[{int(dims)}]" not in row[0]:
+        raise EmbedError(
+            f"message_embeddings already exists with a different dimension than {dims}. "
+            "This is expected if you previously applied the OpenAI 1536-d schema. "
+            "Drop and recreate before backfill: "
+            "DROP TABLE IF EXISTS message_embeddings; "
+            "DROP TABLE IF EXISTS embedding_meta; "
+            "(see scripts/README.md)."
+        )
+
+
+def apply_schema(conn: sqlite3.Connection, schema_sql_text: str | None = None, *, dims: int = DEFAULT_DIMS) -> None:
+    sql = schema_sql_text if schema_sql_text is not None else schema_sql(dims)
+    _assert_vec_dims(conn, dims)
     conn.executescript(sql)
+    _ensure_meta_dims_column(conn, dims)
+    _assert_vec_dims(conn, dims)
     conn.commit()
 
 
@@ -334,6 +473,7 @@ def candidate_counts(
     skip_auth: bool = True,
 ) -> dict[str, int]:
     """Dry-run stats: auth / empty-body / already-embedded / hash-changed / due."""
+    stored = model_id(model)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
@@ -373,7 +513,7 @@ def candidate_counts(
             WHERE TRIM(COALESCE(f.body, '')) != ''
               AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
             """,
-            (model, model_version, 1 if skip_auth else 0),
+            (stored, model_version, 1 if skip_auth else 0),
         )
         for row in rows:
             payload = embed_text(row["subject"], row["body"])
@@ -393,7 +533,7 @@ def candidate_counts(
                 WHERE e.message_id = m.id AND e.model = ? AND e.model_version = ?
               )
             """,
-            (1 if skip_auth else 0, model, model_version),
+            (1 if skip_auth else 0, stored, model_version),
         ).fetchone()[0]
     else:
         due = conn.execute(
@@ -424,6 +564,7 @@ def iter_candidates(
     limit: int | None = None,
 ) -> list[dict]:
     """Messages with a non-empty FTS body, not auth, needing (re)embed."""
+    stored = model_id(model)
     if not _has_table(conn, "messages") or not _has_table(conn, "messages_fts"):
         raise EmbedError(
             "DB is missing messages / messages_fts. This script does not ingest mail."
@@ -440,7 +581,7 @@ def iter_candidates(
           AND (? = 0 OR LOWER(COALESCE(m.lane, '')) != 'auth')
         ORDER BY m.id
     """
-    params: list = [model, model_version, 1 if skip_auth else 0]
+    params: list = [stored, model_version, 1 if skip_auth else 0]
     if not _has_table(conn, "embedding_meta"):
         sql = """
             SELECT m.id AS id, m.source AS source, m.lane AS lane,
@@ -489,11 +630,14 @@ def upsert_embedding(
     text_hash: str,
     char_count: int,
     created_at: str | None = None,
+    dims: int = DEFAULT_DIMS,
 ) -> None:
-    if len(vector) != DEFAULT_DIMS:
+    stored = model_id(model)
+    if len(vector) != dims:
         raise EmbedError(
-            f"Embedding dim {len(vector)} != {DEFAULT_DIMS} "
-            f"(text-embedding-3-small v1 is {DEFAULT_DIMS}-d)."
+            f"Embedding dim {len(vector)} != {dims} "
+            f"(v1 default is {DEFAULT_DIMS}-d Matryoshka from {NATIVE_DIMS} native; "
+            f"stored model id {stored})."
         )
     created = created_at or utc_now()
     blob = serialize_f32(vector)
@@ -505,14 +649,15 @@ def upsert_embedding(
     conn.execute(
         """
         INSERT INTO embedding_meta(
-          message_id, model, model_version, created_at, text_hash, char_count
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          message_id, model, model_version, created_at, text_hash, char_count, dims
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(message_id, model, model_version) DO UPDATE SET
           created_at = excluded.created_at,
           text_hash = excluded.text_hash,
-          char_count = excluded.char_count
+          char_count = excluded.char_count,
+          dims = excluded.dims
         """,
-        (message_id, model, model_version, created, text_hash, char_count),
+        (message_id, stored, model_version, created, text_hash, char_count, dims),
     )
 
 
@@ -525,25 +670,34 @@ def backfill(
     limit: int | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     dry_run: bool = False,
-    api_key: str | None = None,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    dims: int = DEFAULT_DIMS,
     embed_fn: EmbedFn | None = None,
     log: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
-    """Idempotent embed of FTS-backed messages. Resume-safe (commit per batch)."""
-    apply_schema(conn)
+    """Idempotent embed of FTS-backed messages. Resume-safe (commit per batch).
+
+    Dry-run never calls Ollama (or any HTTP).
+    """
+    apply_schema(conn, dims=dims)
+    stored = model_id(model)
     counts = candidate_counts(
         conn, model=model, model_version=model_version, skip_auth=skip_auth
     )
     emit = log or (lambda msg: print(msg, file=sys.stderr))
     emit(
         "backfill {c} candidate(s); skipped_auth={a} skipped_empty_body={e} "
-        "skipped_already_embedded={s} reembed_hash_changed={h} joined={j}".format(
+        "skipped_already_embedded={s} reembed_hash_changed={h} joined={j} "
+        "model={m} dims={d} ollama={u}".format(
             c=counts["candidates"],
             a=counts["skipped_auth"],
             e=counts["skipped_empty_body"],
             s=counts["skipped_already_embedded"],
             h=counts["reembed_hash_changed"],
             j=counts["joined"],
+            m=stored,
+            d=dims,
+            u=ollama_url,
         )
     )
     rows = iter_candidates(
@@ -571,12 +725,7 @@ def backfill(
         counts["embedded"] = 0
         return counts
 
-    key = api_key
-    worker = embed_fn
-    if worker is None:
-        if not key:
-            key = read_openai_api_key()
-        worker = lambda texts, mdl, _k=key: openai_embed_batch(texts, mdl, _k)
+    worker = embed_fn or make_ollama_embed_fn(ollama_url, dims)
 
     embedded = 0
     size = max(1, int(batch_size))
@@ -585,7 +734,8 @@ def backfill(
         texts = [row["text"] for row in batch]
         emit(
             f"embedding batch {start // size + 1} "
-            f"({len(batch)} msgs, {start + 1}-{start + len(batch)} of {len(rows)})"
+            f"({len(batch)} msgs, {start + 1}-{start + len(batch)} of {len(rows)}) "
+            f"via {ollama_url} model={ollama_model_tag(model)}"
         )
         vectors = worker(texts, model)
         if len(vectors) != len(batch):
@@ -599,6 +749,7 @@ def backfill(
                 model_version=model_version,
                 text_hash=row["text_hash"],
                 char_count=len(row["text"]),
+                dims=dims,
             )
             embedded += 1
         conn.commit()
@@ -613,11 +764,10 @@ def knn_search(
     query_vector: Sequence[float],
     *,
     k: int = DEFAULT_K,
+    dims: int = DEFAULT_DIMS,
 ) -> list[dict]:
-    if len(query_vector) != DEFAULT_DIMS:
-        raise EmbedError(
-            f"Query vector dim {len(query_vector)} != {DEFAULT_DIMS}."
-        )
+    if len(query_vector) != dims:
+        raise EmbedError(f"Query vector dim {len(query_vector)} != {dims}.")
     if not _has_table(conn, "message_embeddings"):
         raise EmbedError("message_embeddings is missing. Run embed_backfill.py first.")
     k = max(1, int(k))
@@ -659,12 +809,13 @@ def semantic_search(
     *,
     k: int = DEFAULT_K,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    dims: int = DEFAULT_DIMS,
     embed_fn: EmbedFn | None = None,
     extension_path: str | None = None,
     query_vector: Sequence[float] | None = None,
 ) -> list[dict]:
-    """Embed `query` (or use `query_vector`) and return top-k cosine hits.
+    """Embed `query` locally (or use `query_vector`) and return top-k cosine hits.
 
     FTS exact-id lookup stays on messages_fts — this does not replace it.
     """
@@ -673,22 +824,17 @@ def semantic_search(
         raise EmbedError("Query text is empty.")
     conn = connect_db(db, extension_path)
     try:
-        apply_schema(conn)
+        apply_schema(conn, dims=dims)
         vector: Sequence[float]
         if query_vector is not None:
             vector = query_vector
         else:
-            worker = embed_fn
-            key = api_key
-            if worker is None:
-                if not key:
-                    key = read_openai_api_key()
-                worker = lambda texts, mdl, _k=key: openai_embed_batch(texts, mdl, _k)
-            vectors = worker([q], model)
+            worker = embed_fn or make_ollama_embed_fn(ollama_url, dims)
+            vectors = worker([query_text(q)], model)
             if not vectors:
                 raise EmbedError("Embedding the query returned no vector.")
             vector = vectors[0]
-        return knn_search(conn, vector, k=k)
+        return knn_search(conn, vector, k=k, dims=dims)
     finally:
         conn.close()
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Idempotent OpenAI embedding backfill into Mailroom sqlite-vec.
+"""Idempotent local Ollama embedding backfill into Mailroom sqlite-vec.
 
 Reads bodies from messages_fts (join messages_fts.id = messages.id).
-Always skips lane=auth unless --no-skip-auth. Never prints the API key.
+Always skips lane=auth unless --no-skip-auth. Never calls OpenAI.
 Does not call IMAP. Does not rewrite FTS ingest.
 
 Mac (Homebrew Python — Apple /usr/bin/python3 cannot load extensions):
@@ -23,7 +23,10 @@ from embed_lib import (
     DEFAULT_DB,
     DEFAULT_DIMS,
     DEFAULT_MODEL,
+    DEFAULT_MODEL_ID,
     DEFAULT_MODEL_VERSION,
+    DEFAULT_OLLAMA_URL,
+    NATIVE_DIMS,
     EmbedError,
     apply_schema,
     backfill,
@@ -35,8 +38,10 @@ from embed_lib import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Embed Mailroom FTS bodies with OpenAI text-embedding-3-small "
-            f"({DEFAULT_DIMS}-d) into sqlite-vec. Skip lane=auth. Resume-safe."
+            "Embed Mailroom FTS bodies with local Ollama "
+            f"{DEFAULT_MODEL} (stored id {DEFAULT_MODEL_ID}, "
+            f"{DEFAULT_DIMS}-d Matryoshka from {NATIVE_DIMS} native) "
+            "into sqlite-vec. Skip lane=auth. Resume-safe. No OpenAI."
         )
     )
     parser.add_argument(
@@ -53,12 +58,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Count/list candidates; no OpenAI call; still applies schema if missing.",
+        help="Count/list candidates; no Ollama call; still applies schema if missing.",
     )
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"OpenAI embedding model (default: {DEFAULT_MODEL}, {DEFAULT_DIMS}-d).",
+        help=(
+            f"Ollama model tag (default: {DEFAULT_MODEL}). "
+            f"Official library name as of 2026: qwen3-embedding:8b "
+            f"(https://ollama.com/library/qwen3-embedding:8b). "
+            f"Stored as {DEFAULT_MODEL_ID}."
+        ),
     )
     parser.add_argument(
         "--model-version",
@@ -72,7 +82,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-size",
         type=int,
         default=DEFAULT_BATCH_SIZE,
-        help=f"OpenAI embeddings batch size (default: {DEFAULT_BATCH_SIZE}).",
+        help=f"Ollama embed batch size (default: {DEFAULT_BATCH_SIZE}).",
+    )
+    parser.add_argument(
+        "--ollama-url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Local Ollama base URL (default: {DEFAULT_OLLAMA_URL}).",
+    )
+    parser.add_argument(
+        "--dims",
+        type=int,
+        default=DEFAULT_DIMS,
+        help=(
+            f"Stored vector length (default: {DEFAULT_DIMS} Matryoshka). "
+            f"Native {NATIVE_DIMS} needs a matching message_embeddings table "
+            "(drop + recreate if you already applied 1024-d)."
+        ),
     )
     parser.add_argument(
         "--skip-auth",
@@ -101,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         conn = connect_db(db, args.vec_extension)
         try:
-            apply_schema(conn)
+            apply_schema(conn, dims=args.dims)
             backfill(
                 conn,
                 model=args.model,
@@ -110,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 batch_size=args.batch_size,
                 dry_run=args.dry_run,
+                ollama_url=args.ollama_url,
+                dims=args.dims,
             )
         finally:
             conn.close()

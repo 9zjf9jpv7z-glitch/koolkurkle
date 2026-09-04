@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -59,7 +60,7 @@ def insert_message(
 
 
 def fake_embed_fn(mapping: dict[str, list[float]] | None = None):
-    """Return vectors without calling OpenAI. Default: one-hot from text hash."""
+    """Return vectors without calling Ollama. Default: one-hot from text hash."""
 
     def _embed(texts, model):
         out = []
@@ -72,3 +73,19 @@ def fake_embed_fn(mapping: dict[str, list[float]] | None = None):
         return out
 
     return _embed
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: dict, status: int = 200):
+        self._raw = json.dumps(payload).encode()
+        self.status = status
+        self.code = status
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False

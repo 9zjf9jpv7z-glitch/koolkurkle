@@ -18,13 +18,16 @@ from mailroom_test_util import insert_message, one_hot, open_mem  # noqa: E402
 
 
 class SchemaTests(unittest.TestCase):
-    def test_schema_file_declares_1536_and_meta(self):
+    def test_schema_file_declares_1024_and_meta(self):
         sql = (SCRIPTS / "embed_schema.sql").read_text(encoding="utf-8")
-        self.assertIn("float[1536]", sql)
+        self.assertIn("embedding float[1024]", sql)
+        self.assertNotIn("embedding float[1536]", sql)
         self.assertIn("distance_metric=cosine", sql)
         self.assertIn("embedding_meta", sql)
         self.assertIn("text_hash", sql)
+        self.assertIn("qwen3-embedding-8b", sql)
         self.assertIn("message_id TEXT PRIMARY KEY", sql)
+        self.assertIn("dims INTEGER", sql)
 
     def test_apply_schema_creates_tables(self):
         conn = open_mem()
@@ -91,6 +94,28 @@ class SchemaTests(unittest.TestCase):
                 text_hash="h",
                 char_count=1,
             )
+        conn.close()
+
+    def test_existing_1536_schema_rejected(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        el.load_sqlite_vec(conn)
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE message_embeddings USING vec0(
+              message_id TEXT PRIMARY KEY,
+              embedding float[1536] distance_metric=cosine
+            );
+            """
+        )
+        conn.commit()
+        with self.assertRaises(el.EmbedError) as ctx:
+            el.apply_schema(conn, dims=1024)
+        self.assertIn("1536", conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='message_embeddings'"
+        ).fetchone()[0])
+        self.assertIn("different dimension", str(ctx.exception))
+        self.assertIn("DROP TABLE", str(ctx.exception))
         conn.close()
 
     def test_existing_messages_table_not_rewritten(self):

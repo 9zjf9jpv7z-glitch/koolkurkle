@@ -22,8 +22,10 @@ from pathlib import Path
 
 from embed_lib import (
     DEFAULT_DB,
+    DEFAULT_DIMS,
     DEFAULT_K,
     DEFAULT_MODEL,
+    DEFAULT_OLLAMA_URL,
     EmbedError,
     semantic_search as _semantic_search,
 )
@@ -41,20 +43,23 @@ def semantic_search(
     k: int = DEFAULT_K,
     *,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+    dims: int = DEFAULT_DIMS,
     extension_path: str | None = None,
     query_vector: list[float] | None = None,
 ) -> list[dict]:
     """Top-k semantic hits. Mirrors a search_mail-style list-of-dicts return.
 
     Keys: id, subject, from_addr, score (1 - cosine distance), distance, snippet.
+    Embeds the query via local Ollama unless `query_vector` is supplied.
     """
     return _semantic_search(
         query,
         Path(db).expanduser(),
         k=k,
         model=model,
-        api_key=api_key,
+        ollama_url=ollama_url,
+        dims=dims,
         extension_path=extension_path,
         query_vector=query_vector,
     )

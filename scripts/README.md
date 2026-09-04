@@ -1,9 +1,17 @@
-# Mailroom semantic search (Mac-local)
+# Mailroom semantic search (Mac-local, offline)
 
-OpenAI `text-embedding-3-small` (1536-d) + sqlite-vec over bodies already in
-`messages_fts`. FTS exact-id search stays on FTS — this does not replace it.
+Local **Ollama `qwen3-embedding:8b`** + sqlite-vec over bodies already in
+`messages_fts`. No OpenAI account. After `ollama pull`, backfill and search
+stay on the machine.
 
-Copy onto MacBook-Pro.local:
+FTS exact-id search stays on FTS — this does not replace it.
+
+Confirmed against the official Ollama library (2026):
+[qwen3-embedding:8b](https://ollama.com/library/qwen3-embedding:8b).
+`qwen3-embedding` / `qwen3-embedding:latest` is the same 8B Q4_K_M (~4.7 GB).
+Stored model id in `embedding_meta.model` is `qwen3-embedding-8b`.
+
+Copy onto MacBook-Pro.local (M1 Max 32 GB):
 
 ```bash
 mkdir -p ~/MailArchive/scripts
@@ -14,18 +22,23 @@ cp scripts/*.py scripts/*.sql scripts/README.md ~/MailArchive/scripts/
 
 Default DB: `~/MailArchive/mailroom.sqlite`. Scripts take `--db`.
 
-`mailroom_tools.py` is not in older clones — it is a thin wrapper that adds
-`semantic_search` (list of dicts). There is no `search_mail` in this repo;
-FTS remains the Mac Mailroom index.
+`mailroom_tools.py` is a thin wrapper that adds `semantic_search` (list of
+dicts). There is no `search_mail` in this repo; FTS remains the Mac Mailroom
+index.
 
-## Install sqlite-vec on macOS arm64
+## Install (once, then offline)
 
-Apple `/usr/bin/python3` **cannot load SQLite extensions**. Use Homebrew Python.
+Apple `/usr/bin/python3` **cannot load SQLite extensions**. Use Homebrew
+Python at `/opt/homebrew/bin/python3`.
 
 ```bash
-brew install python
+brew install python ollama
 # Apple Silicon Homebrew python:
 #   /opt/homebrew/bin/python3
+
+# Start Ollama (GUI app or service). Then pull the official 8B embedder:
+ollama pull qwen3-embedding:8b
+
 /opt/homebrew/bin/python3 -m pip install sqlite-vec
 # or from the repo:
 # /opt/homebrew/bin/python3 -m pip install -r requirements-embed.txt
@@ -49,65 +62,43 @@ If you prefer a loadable dylib instead of pip:
 There is no official `brew install sqlite-vec` formula as of this writing.
 `brew install python` + `pip install sqlite-vec` is the arm64 path.
 
-## Keychain (OpenAI API key)
+Ollama listens on `http://127.0.0.1:11434` by default (`--ollama-url`).
+The scripts POST `/api/embed` (batch), and fall back to OpenAI-compatible
+`/v1/embeddings` on the same localhost. Nothing leaves the Mac.
 
-Preferred service/account (tried first):
+### Fallback (not the default)
 
-| service           | account     |
-| ----------------- | ----------- |
-| `openai-api-key`  | `koolkurkle` |
-
-Also tried, in order, if the preferred item is missing:
-`OpenAI API Key`/`koolkurkle`, `OpenAI`/`api-key`, `openai`/`OPENAI_API_KEY`,
-`com.openai.api`/`koolkurkle`. The script fails clearly if none exist.
-
-**macOS Tahoe:** `-w` must be the last argument to `security add-generic-password`.
-
-Interactive (prompts for the password; nothing lands in shell history):
-
-```bash
-security add-generic-password -a koolkurkle -s openai-api-key -w
-```
-
-If you pass the secret on the command line, it is still last:
-
-```bash
-security add-generic-password -a koolkurkle -s openai-api-key -w 'YOUR_KEY'
-```
-
-Read (scripts do this; `-w` last; they never print the result):
-
-```bash
-security find-generic-password -s openai-api-key -a koolkurkle -w
-```
-
-`OPENAI_API_KEY` overrides Keychain **for tests / one-off only**. Do not export
-it in a shared shell. The scripts never print or log the key.
+If Ollama cannot load the 8B embedder on this machine, MLX or
+`sentence-transformers` can produce the same Qwen3-Embedding-8B vectors,
+but these scripts do **not** call them. Stay on Ollama unless that path is
+blocked.
 
 ## Backfill then search
 
 Dry-run lists candidate counts (skips `lane=auth` and already-embedded same
-model+version+hash):
+model+version+hash). **Does not call Ollama or any cloud API:**
 
 ```bash
 cd ~/MailArchive/scripts
 /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --dry-run
 ```
 
-Embed (resume-safe; `--limit` for a slice):
+Embed (resume-safe; `--limit` for a slice). Requires local Ollama with
+`qwen3-embedding:8b`:
 
 ```bash
 /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --limit 200
 /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite
 ```
 
-One-liner search after backfill:
+One-liner search after backfill (embeds the query locally):
 
 ```bash
 /opt/homebrew/bin/python3 ~/MailArchive/scripts/semantic_search.py --db ~/MailArchive/mailroom.sqlite --k 10 'receipt from apple'
 ```
 
-Optional after-8pm hook (launchd/cron). Does not run OpenAI until you schedule it:
+Optional after-8pm hook (launchd/cron). Does not call Ollama until you
+schedule it, and then only localhost:
 
 ```bash
 # crontab example — 8:15pm local, 200 msgs/night
@@ -119,12 +110,41 @@ Optional after-8pm hook (launchd/cron). Does not run OpenAI until you schedule i
 - Join `messages_fts.id = messages.id` with a **non-empty FTS `body`**.
 - Sources: dump-backed **and** `source='imap-live'` (any source once it has a body).
 - **Always skip `lane=auth`** (2FA / auth mail). `--skip-auth` is on by default.
-- v1 payload: first **24000 characters** of `subject + "\\n\\n" + body`
-  (~6k tokens; model max is 8191). SHA-256 of that string is `text_hash`.
+- v1 document payload: first **16000 characters** of `subject + "\n\n" + body`
+  (~4k tokens at 4 chars/token; model context is 32k). SHA-256 of that
+  string is `text_hash`. Queries add a Qwen3 instruct prefix (documents do
+  not).
 - Idempotent: skip ids that already have an embedding for the same
   `model` + `model_version` and the same `text_hash`. Body edits re-embed.
 
-## Tests (no network, no Keychain)
+## Dimensions (1024 vs 4096)
+
+`qwen3-embedding:8b` native output is **4096-d**. v1 stores a **1024-d**
+Matryoshka prefix (first 1024 floats, L2-renormalized). That is ~4 KiB per
+message instead of 16 KiB, and the model is trained for user-defined dims
+in 32–4096. Cosine KNN quality for mail search stays high at 1024.
+
+Native 4096:
+
+```bash
+# drop the 1024-d table first if it already exists
+# /opt/homebrew/opt/sqlite/bin/sqlite3 ~/MailArchive/mailroom.sqlite \
+#   "DROP TABLE IF EXISTS message_embeddings; DROP TABLE IF EXISTS embedding_meta;"
+/opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --dims 4096
+```
+
+`--dims` must match between backfill and search. The vec0 table is created
+at the first `apply_schema` with that length.
+
+If you previously applied the OpenAI `text-embedding-3-small` schema
+(`float[1536]` from PR #4), drop those tables before this backfill:
+
+```bash
+/opt/homebrew/opt/sqlite/bin/sqlite3 ~/MailArchive/mailroom.sqlite \
+  "DROP TABLE IF EXISTS message_embeddings; DROP TABLE IF EXISTS embedding_meta;"
+```
+
+## Tests (no network, no model download)
 
 From the repo root:
 
@@ -132,3 +152,6 @@ From the repo root:
 python3 -m pip install -r requirements-embed.txt
 python3 -m unittest discover -s tests -v
 ```
+
+CI mocks Ollama HTTP and uses fake 1024-d vectors. It never pulls
+`qwen3-embedding:8b` and never calls a cloud API.

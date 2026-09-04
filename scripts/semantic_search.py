@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Query Mailroom sqlite-vec with an OpenAI-embedded search string.
+"""Query Mailroom sqlite-vec with a locally embedded search string.
 
+Embeds the query via local Ollama Qwen3-Embedding-8B (no OpenAI).
 Prints id, subject, from, score, snippet. FTS exact-id lookup stays on
 messages_fts — this CLI does not replace FTS.
 
@@ -16,8 +17,10 @@ from pathlib import Path
 
 from embed_lib import (
     DEFAULT_DB,
+    DEFAULT_DIMS,
     DEFAULT_K,
     DEFAULT_MODEL,
+    DEFAULT_OLLAMA_URL,
     EmbedError,
     default_db_path,
     format_hits,
@@ -29,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Semantic search over Mailroom embeddings (cosine via sqlite-vec). "
+            "Query is embedded locally with Ollama. "
             "FTS remains separate — do not use this as an exact-id replacement."
         )
     )
@@ -47,7 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Must match the backfill model (default: {DEFAULT_MODEL}).",
+        help=f"Must match the backfill Ollama tag (default: {DEFAULT_MODEL}).",
+    )
+    parser.add_argument(
+        "--ollama-url",
+        default=DEFAULT_OLLAMA_URL,
+        help=f"Local Ollama base URL (default: {DEFAULT_OLLAMA_URL}).",
+    )
+    parser.add_argument(
+        "--dims",
+        type=int,
+        default=DEFAULT_DIMS,
+        help=f"Must match the backfill stored dims (default: {DEFAULT_DIMS}).",
     )
     parser.add_argument(
         "--json",
@@ -71,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
             db,
             k=args.k,
             model=args.model,
+            ollama_url=args.ollama_url,
+            dims=args.dims,
             extension_path=args.vec_extension,
         )
     except EmbedError as exc:

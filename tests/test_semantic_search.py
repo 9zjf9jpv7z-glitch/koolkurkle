@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""semantic_search CLI + mailroom_tools. Fake vectors only."""
+"""semantic_search CLI + mailroom_tools. Fake vectors / mocked Ollama only."""
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import subprocess
@@ -86,15 +87,37 @@ class SearchTests(unittest.TestCase):
         self.assertFalse(hasattr(mailroom_tools, "search_mail"))
         self.assertIn("FTS", mailroom_tools.SEARCH_MAIL_NOTE)
 
+    def test_mailroom_tools_has_no_api_key(self):
+        params = inspect.signature(mailroom_tools.semantic_search).parameters
+        self.assertNotIn("api_key", params)
+        self.assertIn("ollama_url", params)
+
+    def test_search_embeds_query_via_local_fn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            seeded_file_db(db)
+            seen = []
+
+            def fake(texts, model):
+                seen.append((list(texts), model))
+                return [one_hot(0)]
+
+            hits = el.semantic_search(
+                "apple receipt",
+                db,
+                k=1,
+                embed_fn=fake,
+            )
+        self.assertEqual(hits[0]["id"], "hit-apple")
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0][0][0].startswith("Instruct:"))
+        self.assertIn("apple receipt", seen[0][0][0])
+        self.assertEqual(seen[0][1], el.DEFAULT_MODEL)
+
     def test_cli_prints_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "mailroom.sqlite"
             seeded_file_db(db)
-            # Patch semantic_search.main's embed by using query_vector via
-            # a tiny wrapper: call library then format, plus CLI --json with
-            # OPENAI mocked through embed_lib.semantic_search query_vector
-            # is not a CLI flag — use a fake embed_fn by invoking the module
-            # function after injecting env that we never send.
             hits = el.semantic_search(
                 "ignored",
                 db,
@@ -149,6 +172,9 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("--k", proc.stdout)
         self.assertIn("--db", proc.stdout)
+        self.assertIn("--ollama-url", proc.stdout)
+        self.assertIn("qwen3-embedding:8b", proc.stdout)
+        self.assertNotIn("OpenAI", proc.stdout)
 
 
 if __name__ == "__main__":
