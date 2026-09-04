@@ -504,20 +504,23 @@ PAGE_HTML = r"""<!DOCTYPE html>
   main {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
     padding: 8px 24px 28px;
     align-items: stretch;
+    min-width: 0;
   }
-  main.dual { grid-template-columns: 1fr 1fr; }
+  main.dual { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .pane {
     background: linear-gradient(180deg, #10131b 0%, var(--panel) 100%);
     border: 1px solid var(--line);
     border-radius: 18px;
-    padding: 28px 28px 22px;
+    padding: 28px 22px 22px;
     display: flex;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
   }
   .who {
@@ -533,18 +536,22 @@ PAGE_HTML = r"""<!DOCTYPE html>
     display: flex;
     align-items: baseline;
     justify-content: center;
-    gap: 16px;
+    gap: 12px;
     padding: 18px 0 8px;
+    min-width: 0;
+    overflow: hidden;
   }
   .rate {
-    font-size: clamp(5.2rem, 14vw, 11rem);
+    font-size: clamp(4.4rem, 12vw, 10rem);
     line-height: 0.9;
     font-weight: 600;
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
     color: var(--amber);
     text-shadow: 0 0 22px rgba(255,176,32,0.28), 0 0 2px rgba(255,176,32,0.6);
+    max-width: 100%;
   }
+  main.dual .rate { font-size: clamp(3.1rem, 6.2vw, 7rem); }
   .unit {
     font-size: clamp(1.1rem, 2.4vw, 2rem);
     color: var(--amber-dim);
@@ -566,13 +573,14 @@ PAGE_HTML = r"""<!DOCTYPE html>
     color: var(--muted); margin-bottom: 6px;
   }
   .v {
-    font-size: clamp(1.05rem, 2vw, 1.55rem);
+    font-size: clamp(0.95rem, 1.6vw, 1.4rem);
     color: var(--soft);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  main.dual .v { font-size: clamp(0.9rem, 1.25vw, 1.2rem); }
   .track {
     height: 3px; background: #171b24; border-radius: 99px; margin: 16px 0 0;
     overflow: hidden;
