@@ -261,6 +261,8 @@ def format_eta(seconds: Optional[float]) -> str:
 def format_rate(rate: Optional[float]) -> str:
     if rate is None:
         return "—"
+    if rate <= 0:
+        return "0"
     if rate >= 100:
         return "{:,}".format(int(round(rate)))
     if rate >= 10:
@@ -295,12 +297,17 @@ class RateTracker:
             self._last_committed = None
 
     def note(self, inode: Optional[int], committed: int, now: float) -> None:
+        """Record a poll sample only when committed changes (or first sighting)."""
         with self._lock:
             if inode is not None and self._last_inode is not None and inode != self._last_inode:
                 self._polls.clear()
+                self._last_committed = None
             if self._last_committed is not None and committed < self._last_committed:
                 self._polls.clear()
+                self._last_committed = None
             self._last_inode = inode
+            if self._last_committed == committed and self._polls:
+                return
             self._last_committed = committed
             self._polls.append((now, committed))
 
@@ -358,32 +365,36 @@ def snapshot_log(
         return base
 
     samples, committed, total = parse_log_samples(text)
+    log_samples = list(samples)
+    last_progress = float(st.st_mtime)
+    if log_samples:
+        last_progress = max(last_progress, log_samples[-1][0])
     if tracker is not None and committed is not None:
         tracker.note(getattr(st, "st_ino", None), committed, now_ts)
-        samples = samples + tracker.polls()
+        samples = log_samples + tracker.polls()
 
-    rate, warming = compute_rate(samples, window_sec, now=now_ts)
+    done = bool(committed is not None and total is not None and total > 0 and committed >= total)
+    stale = (now_ts - last_progress) > stale_sec and not done
+    rate_now = last_progress if stale else now_ts
+    rate_samples = log_samples if stale else samples
+    rate, warming = compute_rate(rate_samples, window_sec, now=rate_now)
     rate_kind = "rolling" if rate is not None else None
     if rate is None:
         start = filename_start_ts(path) or file_birth_ts(path)
-        rate = overall_rate(committed, start, now_ts)
+        rate = overall_rate(committed, start, last_progress)
         if rate is not None:
             rate_kind = "overall"
             warming = False
 
     remaining = None
     eta_sec = None
-    done = False
     if committed is not None and total is not None:
         remaining = max(0, total - committed)
-        done = total > 0 and committed >= total
         if done:
             eta_sec = 0.0
             warming = False
         elif rate is not None and rate > 0 and remaining > 0:
             eta_sec = remaining / (rate / 3600.0)
-
-    stale = (now_ts - st.st_mtime) > stale_sec and not done
     if committed is None:
         base["error"] = "no 'committed N/M' lines in log tail"
         base["log_mtime"] = iso_local(st.st_mtime)
@@ -616,7 +627,9 @@ function statusOf(p) {
   if (p.done) return { cls: "done", text: "complete" };
   if (p.stale) return { cls: "stale", text: "stale · log not advancing" };
   if (p.warming) return { cls: "stale", text: "warming · collecting window" };
-  const kind = p.rate_kind === "overall" ? "overall" : ((p.window_sec || 180) + "s window");
+  if (p.rate_kind === "overall") return { cls: "live", text: "live · overall" };
+  const sec = p.window_sec || 180;
+  const kind = sec % 60 === 0 ? ((sec / 60) + "m window") : (sec + "s window");
   return { cls: "live", text: "live · " + kind };
 }
 function pane(p, fallbackLabel) {
@@ -629,8 +642,8 @@ function pane(p, fallbackLabel) {
   const eta = (p && p.eta_human) || "—";
   const st = statusOf(p);
   const width = pct(committed, total).toFixed(1);
-  const errHint = (p && p.error && p.remote_url)
-    ? `<div class="hint">Firewall / Little Snitch may be blocking ${p.remote_url}. Open that Mac’s UI in another tab, or allow inbound on the status port.</div>`
+    const errHint = (p && p.error && p.remote_url)
+    ? `<div class="hint">Firewall / Little Snitch may be blocking <span style="word-break:break-all">${p.remote_url}</span>. Open that Mac’s UI in another tab, or allow inbound on the status port.</div>`
     : "";
   return `<section class="pane">
     <div class="who"><span>${label}</span><span class="host">${host}</span></div>
@@ -893,6 +906,12 @@ def run_self_test() -> int:
     check(snap["rate_per_hour"] is not None and 8000 <= snap["rate_per_hour"] <= 12000, "rate ~9600/hr")
     check(snap["eta_human"] != "—", "eta present")
     check(snap["remaining"] == 23856 - (2500 + 11 * 40), "remaining")
+
+    tracker = RateTracker()
+    paused = snapshot_log(live, "mbp", "MBP", "test-host", 180, 90, tracker=tracker, now=now)
+    later = snapshot_log(live, "mbp", "MBP", "test-host", 180, 90, tracker=tracker, now=now + 40)
+    check(later["rate_per_hour"] is not None and later["rate_per_hour"] > 1000, "paused log keeps rolling rate")
+    check(later["rate_display"] != "0", "paused log does not display 0")
 
     check("tkinter" not in sys.modules, "tkinter not imported")
     src_lines = open(__file__, "r", encoding="utf-8").read().splitlines()
