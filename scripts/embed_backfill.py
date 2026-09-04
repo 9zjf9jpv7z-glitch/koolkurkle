@@ -10,6 +10,7 @@ Mac (Homebrew Python — Apple /usr/bin/python3 cannot load extensions):
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --dry-run
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --limit 200
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --id-mod 2 --id-rem 0
+  /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --id-mod 2 --id-rem 1 --batch-size 1 --max-chars 1000
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from embed_lib import (
     backfill,
     connect_db,
     default_db_path,
+    validate_char_bounds,
     validate_shard,
 )
 
@@ -140,6 +142,29 @@ def build_parser() -> argparse.ArgumentParser:
             "--id-rem 0 and the Mac mini copy uses --id-rem 1."
         ),
     )
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Embed only if len(embed_text(subject, body)) <= N. "
+            "Length is the same CHAR_CAP-truncated payload used for text_hash. "
+            "With --min-chars N, use --max-chars N on a separate run for a "
+            "clean split (length N is embedded only by --max-chars)."
+        ),
+    )
+    parser.add_argument(
+        "--min-chars",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Embed only if len(embed_text(subject, body)) > N. "
+            "Length is the same CHAR_CAP-truncated payload used for text_hash. "
+            "When both --max-chars and --min-chars are set, max must be > min."
+        ),
+    )
     return parser
 
 
@@ -148,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     db = Path(args.db).expanduser()
     try:
         id_mod, id_rem = validate_shard(args.id_mod, args.id_rem)
+        max_chars, min_chars = validate_char_bounds(args.max_chars, args.min_chars)
         conn = connect_db(db, args.vec_extension)
         try:
             apply_schema(conn, dims=args.dims)
@@ -163,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
                 dims=args.dims,
                 id_mod=id_mod,
                 id_rem=id_rem,
+                max_chars=max_chars,
+                min_chars=min_chars,
             )
         finally:
             conn.close()

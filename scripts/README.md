@@ -156,6 +156,30 @@ Do not change those mid-corpus.
 an unsigned int) `% N == R`, so UUID / text ids split evenly. Dry-run
 counts are shard-filtered and log `shard rem/mod`.
 
+### Short vs long (same shard)
+
+`--max-chars N` embeds only when `len(embed_text(subject, body)) <= N`.
+`--min-chars N` embeds only when that length is `> N`. Length is the same
+CHAR_CAP-truncated payload used for `text_hash`, so a 20k body counts as
+16000. `--max-chars 1000` and `--min-chars 1000` never double-embed:
+length 1000 goes to `--max-chars` only. If both flags are passed on one
+run, `max` must be `> min`. Combines with `--id-mod` / `--id-rem`.
+Dry-run counts include `skipped_too_long` / `skipped_too_short`.
+
+Mini (short messages, batch 1) then MBP long sweep, same shard:
+
+```bash
+# Mini — shard 1, short only
+/opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py \
+  --db ~/MailArchive/mailroom-copy.sqlite \
+  --id-mod 2 --id-rem 1 --batch-size 1 --max-chars 1000
+
+# MBP — shard 1, long only
+/opt/homebrew/bin/python3 ~/MailArchive/scripts/embed_backfill.py \
+  --db ~/MailArchive/mailroom.sqlite \
+  --id-mod 2 --id-rem 1 --min-chars 1000
+```
+
 ## What gets embedded
 
 - Join `messages_fts.id = messages.id` with a **non-empty FTS `body`**.
@@ -167,6 +191,8 @@ counts are shard-filtered and log `shard rem/mod`.
   not).
 - Idempotent: skip ids that already have an embedding for the same
   `model` + `model_version` and the same `text_hash`. Body edits re-embed.
+- Optional `--max-chars` / `--min-chars` skip payloads outside that
+  window (`skipped_too_long` / `skipped_too_short`).
 
 ## Dimensions (1024 vs 4096)
 
