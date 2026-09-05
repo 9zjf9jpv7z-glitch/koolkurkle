@@ -166,9 +166,12 @@ def validate_char_bounds(
     """Optional length window on ``len(embed_text(...))`` (after CHAR_CAP).
 
     Either flag may be omitted. On a **single** call with both set, the
-    filters AND: embed iff ``min_chars < len <= max_chars``, so
-    ``max_chars > min_chars`` is required (equal N is an empty range).
-    Cross-machine partition uses **one** flag per process at the same N
+    filters AND as a closed band: embed iff ``min_chars <= len <= max_chars``.
+    ``max_chars >= min_chars`` is required (equal N keeps only that length).
+    This is not an "overlap" error — ``--min-chars 1500 --max-chars 2000``
+    is a valid band.
+
+    Cross-machine partition still uses **one** flag per process at the same N
     (Mini ``--max-chars 1000``; MBP ``--min-chars 1000``).
     """
     if max_chars is None and min_chars is None:
@@ -182,10 +185,10 @@ def validate_char_bounds(
     if (
         parsed_max is not None
         and parsed_min is not None
-        and parsed_max <= parsed_min
+        and parsed_max < parsed_min
     ):
         raise EmbedError(
-            "--max-chars must be > --min-chars when both are set "
+            "--max-chars must be >= --min-chars when both are set "
             f"(got max_chars={parsed_max} min_chars={parsed_min})"
         )
     return parsed_max, parsed_min
@@ -198,14 +201,19 @@ def char_bound_skip(
 ) -> str | None:
     """``'too_long'``, ``'too_short'``, or None if this payload should embed.
 
-    ``--max-chars N`` keeps ``n <= N``. ``--min-chars N`` keeps ``n > N``.
-    Both together AND: ``min_chars < n <= max_chars``.
+    ``--max-chars N`` keeps ``n <= N``. ``--min-chars N`` alone keeps ``n > N``
+    (cross-machine split at the same N). Both together AND as a closed band:
+    ``min_chars <= n <= max_chars``.
     """
     max_chars, min_chars = validate_char_bounds(max_chars, min_chars)
     if max_chars is not None and n > max_chars:
         return "too_long"
-    if min_chars is not None and n <= min_chars:
-        return "too_short"
+    if min_chars is not None:
+        if max_chars is not None:
+            if n < min_chars:
+                return "too_short"
+        elif n <= min_chars:
+            return "too_short"
     return None
 
 
@@ -744,7 +752,7 @@ def iter_candidates(
     Optional ``id_mod`` / ``id_rem`` keep only ids whose stable hash lands in
     that shard. Optional ``max_chars`` / ``min_chars`` keep only payloads
     whose ``len(embed_text(...))`` (CHAR_CAP first) is ``<= max`` / ``> min``.
-    Both together AND (``min < len <= max``). ``limit`` applies after
+    Both together AND as a closed band (``min <= len <= max``). ``limit`` applies after
     shard and char filters.
     """
     id_mod, id_rem = validate_shard(id_mod, id_rem)

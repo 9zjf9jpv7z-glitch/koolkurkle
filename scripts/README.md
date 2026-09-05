@@ -15,7 +15,7 @@ Copy onto MacBook-Pro.local (M1 Max 32 GB):
 
 ```bash
 mkdir -p ~/MailArchive/scripts
-cp scripts/*.py scripts/*.sql scripts/README.md ~/MailArchive/scripts/
+cp scripts/*.py scripts/*.sh scripts/*.sql scripts/README.md ~/MailArchive/scripts/
 # from a clone:
 # cp /path/to/koolkurkle/scripts/* ~/MailArchive/scripts/
 ```
@@ -169,9 +169,10 @@ CHAR_CAP-truncated payload used for `text_hash`, so a 20k body counts as
 invocations never overlap — length 1000 goes to Mini only. Do **not**
 pass both flags on either machine for this split.
 
-**Single run with both flags:** the filters AND (`min < len <= max`).
-`max` must be `> min` or the range is empty and the CLI exits. Equal N
-on one argv is rejected; that is not the partition recipe.
+**Single run with both flags:** the filters AND as a closed band
+(`min <= len <= max`). `max` must be `>= min`.
+`--min-chars 1500 --max-chars 2000` keeps 1500–2000 inclusive. Equal N
+keeps only that length. This is not an overlap / EXIT 2.
 
 Mini (short messages, batch 1) then MBP long sweep, same shard — two
 separate invocations:
@@ -188,6 +189,24 @@ separate invocations:
   --id-mod 2 --id-rem 1 --min-chars 1000
 ```
 
+### Live job health (`embed_health_sample.sh`)
+
+`embed_health_sample.sh` samples **live** rem1 / rem3 / `embed_shard*.latest`
+jobs (log + pid file + LaunchAgent). It prefers those over a finished
+`embed_full_*.log`, so a completed full backfill is not a false soft-stall.
+
+```zsh
+# on the Mac, after copy
+~/MailArchive/scripts/embed_health_sample.sh
+~/MailArchive/scripts/embed_health_sample.sh --pick-only
+~/MailArchive/scripts/embed_health_sample.sh --json
+```
+
+Looks in `~/MailArchive/logs` (override `MAILARCHIVE_LOGS`), pid files in
+`~/MailArchive/run` or next to the logs, and `~/Library/LaunchAgents`
+when `launchctl` is present. Exit 1 only for a soft-stall on a live
+shard job; a done `embed_full` is reported as ignored.
+
 ## What gets embedded
 
 - Join `messages_fts.id = messages.id` with a **non-empty FTS `body`**.
@@ -201,8 +220,8 @@ separate invocations:
   `model` + `model_version` and the same `text_hash`. Body edits re-embed.
 - Optional `--max-chars` / `--min-chars` skip payloads outside that
   window (`skipped_too_long` / `skipped_too_short`). One flag per
-  process for a same-N split; both on one argv AND and require
-  `max > min`.
+  process for a same-N split; both on one argv AND as a closed band
+  (`min <= len <= max`, `max >= min`).
 
 ## Dimensions (1024 vs 4096)
 

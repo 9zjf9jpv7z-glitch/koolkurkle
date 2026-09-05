@@ -44,18 +44,30 @@ class ValidateCharBoundsTests(unittest.TestCase):
         self.assertEqual(el.validate_char_bounds(1000, None), (1000, None))
         self.assertEqual(el.validate_char_bounds(None, 1000), (None, 1000))
         self.assertEqual(el.validate_char_bounds(2000, 1000), (2000, 1000))
+        # Closed band: max >= min is valid (1500–2000, or a single length).
+        self.assertEqual(el.validate_char_bounds(2000, 1500), (2000, 1500))
+        self.assertEqual(el.validate_char_bounds(1000, 1000), (1000, 1000))
 
-    def test_both_on_one_call_require_max_greater_than_min(self):
-        # Single-run AND: min < len <= max. Equal N is an empty range.
+    def test_both_on_one_call_require_max_at_least_min(self):
+        # Closed band min <= len <= max. Reject only inverted bounds.
         with self.assertRaises(el.EmbedError) as ctx:
-            el.validate_char_bounds(1000, 1000)
-        self.assertIn("max-chars must be > --min-chars", str(ctx.exception))
-        with self.assertRaises(el.EmbedError):
             el.validate_char_bounds(999, 1000)
+        self.assertIn("max-chars must be >= --min-chars", str(ctx.exception))
         with self.assertRaises(el.EmbedError):
             el.validate_char_bounds(-1, None)
         with self.assertRaises(el.EmbedError):
             el.validate_char_bounds(None, -5)
+
+    def test_closed_band_includes_min_and_max(self):
+        self.assertTrue(el.in_char_bounds(1500, max_chars=2000, min_chars=1500))
+        self.assertTrue(el.in_char_bounds(2000, max_chars=2000, min_chars=1500))
+        self.assertTrue(el.in_char_bounds(1750, max_chars=2000, min_chars=1500))
+        self.assertFalse(el.in_char_bounds(1499, max_chars=2000, min_chars=1500))
+        self.assertFalse(el.in_char_bounds(2001, max_chars=2000, min_chars=1500))
+        self.assertIsNone(el.char_bound_skip(1500, max_chars=2000, min_chars=1500))
+        self.assertEqual(el.char_bound_skip(1499, max_chars=2000, min_chars=1500), "too_short")
+        self.assertEqual(el.char_bound_skip(2001, max_chars=2000, min_chars=1500), "too_long")
+        self.assertTrue(el.in_char_bounds(1000, max_chars=1000, min_chars=1000))
 
     def test_partition_predicate(self):
         self.assertTrue(el.in_char_bounds(1000, max_chars=1000))
@@ -101,8 +113,8 @@ class CharBoundFilterTests(unittest.TestCase):
     def test_separate_invocations_at_1000_are_disjoint_and_cover(self):
         """Mini --max-chars 1000 alone vs MBP --min-chars 1000 alone.
 
-        Same N on two processes: zero overlap, full cover. Not one argv
-        with both flags (that AND would be empty and is rejected).
+        Same N on two processes: zero overlap, full cover. One argv with
+        both flags is a closed band (not the partition recipe).
         """
         conn = open_mem()
         lengths = (1, 999, 1000, 1001, 5000)
@@ -137,10 +149,10 @@ class CharBoundFilterTests(unittest.TestCase):
             row["id"]
             for row in el.iter_candidates(conn, max_chars=2000, min_chars=1000)
         }
-        self.assertEqual(ids, {"len-1001", "len-1500", "len-2000"})
+        self.assertEqual(ids, {"len-1000", "len-1001", "len-1500", "len-2000"})
         counts = el.candidate_counts(conn, max_chars=2000, min_chars=1000)
-        self.assertEqual(counts["candidates"], 3)
-        self.assertEqual(counts["skipped_too_short"], 2)
+        self.assertEqual(counts["candidates"], 4)
+        self.assertEqual(counts["skipped_too_short"], 1)
         self.assertEqual(counts["skipped_too_long"], 1)
         conn.close()
 
@@ -271,9 +283,39 @@ class CharBoundCliTests(unittest.TestCase):
         self.assertEqual(both.max_chars, 1000)
         self.assertEqual(both.min_chars, 100)
 
-    def test_cli_rejects_equal_bounds_on_one_argv(self):
-        # Cross-machine split uses one flag per process. Both at 1000
-        # on one argv is an empty AND range.
+    def test_cli_accepts_closed_band_min_1500_max_2000(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            conn = el.connect_db(db)
+            el.ensure_mailroom_tables(conn)
+            el.apply_schema(conn)
+            for n, mid in ((1400, "under"), (1500, "lo"), (1750, "mid"), (2000, "hi"), (2001, "over")):
+                insert_embed_len(conn, mid, n)
+            conn.close()
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "embed_backfill.py"),
+                    "--db",
+                    str(db),
+                    "--dry-run",
+                    "--min-chars",
+                    "1500",
+                    "--max-chars",
+                    "2000",
+                ],
+                cwd=str(SCRIPTS),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("min_chars=1500", combined)
+        self.assertIn("max_chars=2000", combined)
+        self.assertNotIn("overlap", combined.lower())
+
+    def test_cli_rejects_inverted_bounds(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "mailroom.sqlite"
             conn = el.connect_db(db)
@@ -289,7 +331,7 @@ class CharBoundCliTests(unittest.TestCase):
                     str(db),
                     "--dry-run",
                     "--max-chars",
-                    "1000",
+                    "999",
                     "--min-chars",
                     "1000",
                 ],
@@ -299,7 +341,7 @@ class CharBoundCliTests(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("max-chars must be > --min-chars", proc.stderr)
+        self.assertIn("max-chars must be >= --min-chars", proc.stderr)
 
     def test_cli_dry_run_logs_skips_and_works_with_shard(self):
         with tempfile.TemporaryDirectory() as tmp:
