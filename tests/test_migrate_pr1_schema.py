@@ -81,18 +81,21 @@ PR1_EMBED_COLS = {
 def apply_pr0_live_schema_minus_vec0(conn: sqlite3.Connection) -> None:
     """Apply docs/pr0/mailroom_schema.sql except vec0 (CI has no sqlite-vec)."""
     raw = PR0_SCHEMA.read_text(encoding="utf-8")
-    kept: list[str] = []
+    statements: list[str] = []
+    buf: list[str] = []
     for line in raw.splitlines():
         stripped = line.strip()
-        if not stripped:
-            continue
         if stripped.startswith("--"):
             continue
-        lower = stripped.lower()
-        if "vec0" in lower or "sqlite-vec" in lower:
-            continue
-        kept.append(line)
-    conn.executescript("\n".join(kept))
+        buf.append(line)
+        if ";" in line:
+            stmt = "\n".join(buf)
+            buf = []
+            if "vec0" in stmt.lower() or "sqlite-vec" in stmt.lower():
+                continue
+            if stmt.strip():
+                statements.append(stmt)
+    conn.executescript("\n".join(statements))
     conn.execute("PRAGMA user_version = 0")
 
 
