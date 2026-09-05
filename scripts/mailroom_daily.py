@@ -223,7 +223,7 @@ def pipeline_steps() -> tuple[Step, ...]:
             scripts=(EMBED_SCRIPT,),
             python="venv",
             curl="inherit",
-            extra_args=("--skip-auth",),
+            extra_args=("--skip-auth", "--quote-strip", "--lock"),
         ),
     )
 

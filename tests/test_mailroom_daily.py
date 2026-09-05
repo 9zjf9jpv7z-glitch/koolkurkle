@@ -114,6 +114,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn("--db", embed.argv)
         self.assertIn(str(db), embed.argv)
         self.assertIn("--skip-auth", embed.argv)
+        self.assertIn("--quote-strip", embed.argv)
+        self.assertIn("--lock", embed.argv)
         self.assertEqual(embed.python, venv_py)
 
     def test_prefers_fts_script_over_bodies_only(self):
