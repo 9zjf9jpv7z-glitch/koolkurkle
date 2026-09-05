@@ -11,7 +11,8 @@ no writes.
 
   with_writer_lock.py --purpose X -- cmd...
 
-Not wired into embed_backfill in PR-0 (live embeds stay up).
+Live rem LaunchAgents do not pass --lock (old text path until EXIT).
+The §6.1 incremental path may take this lock per batch/heartbeat.
 """
 
 from __future__ import annotations

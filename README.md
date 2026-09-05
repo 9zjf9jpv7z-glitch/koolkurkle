@@ -12,3 +12,7 @@ writer, no SMB/NFS dual-write.
 Install, Keychain **name** (`mailroom.icloud.app-password`), Mini vs MBP
 cutover, and the 24h `last_daily_rag_ok` stamp:
 **[scripts/README.mailroom-daily.md](scripts/README.mailroom-daily.md)**.
+
+New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
+body). Live rem LaunchAgents keep the old text path until EXIT — do not
+restart the 63k backfill or change rem flags.

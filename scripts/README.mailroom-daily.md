@@ -40,10 +40,14 @@ do not dual-write.
    auth-shaped / junk inside that script.
 3. **Classify + bills** — `classify.py` then `notify_bills.py` (same chain
    as `mailroom_8pm.py`).
-4. **Incremental embed** — `embed_backfill.py` with Mini
-   `~/MailArchive/.venv/bin/python` and local Ollama `qwen3-embedding:8b`
-   → sqlite-vec. Resume-safe; only ids missing from `embedding_meta`
-   (plus `--skip-auth`).
+4. **Incremental embed** — `embed_backfill.py --skip-auth --quote-strip --lock`
+   with Mini `~/MailArchive/.venv/bin/python` and local Ollama
+   `qwen3-embedding:8b` → sqlite-vec. MAILROOM §6.1: quote/signature-strip,
+   thread graph, header-prefixed document (`instruct_version=v1`,
+   `quote_stripped=1`, 1024-d). Resume-safe: missing from `embedding_meta`
+   **or** stale `content_hash`. Does **not** restart live rem rows (meta
+   present, `content_hash` NULL). Writer lock is per batch, not the rem
+   job. Live rem LaunchAgents keep the old text path until EXIT.
 5. **ask_mail** is a retrieve stub (not part of the nightly chain).
 
 Stamp: `~/MailArchive/logs/last_daily_rag_ok` is written **only** when the
