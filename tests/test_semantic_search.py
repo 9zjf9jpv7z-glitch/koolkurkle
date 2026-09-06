@@ -264,6 +264,25 @@ class RetrieveHitTests(unittest.TestCase):
         ids = [h["message_id"] for h in hits]
         self.assertEqual(ids, ["p1"])
 
+    def test_inferred_lane_fail_open_when_empty(self):
+        conn = _conn()
+        _add(
+            conn,
+            "m1",
+            subject="SDGE bill",
+            body="utility invoice",
+            lane="inbox",
+        )
+        hits = ss.retrieve(
+            "SDGE bill",
+            k=5,
+            conn=conn,
+            vec_hits_fn=_vec_fn([]),
+            now=NOW,
+            expand_threads=False,
+        )
+        self.assertEqual(hits[0]["message_id"], "m1")
+
     def test_inferred_lane_fail_open_vec_only(self):
         """Inferred money + FTS money hits must not wipe vec (live SoR bug).
 

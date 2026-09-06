@@ -632,9 +632,10 @@ def vec_search(
             "Query vector dim %s != %s (instruct_version=%s)."
             % (len(query_vector), dims, QUERY_INSTRUCT_VERSION)
         )
+    vec_sql = VEC_KNN_SQL
     try:
         rows = conn.execute(
-            VEC_KNN_SQL, (el.serialize_f32(query_vector), max(1, int(k)))
+            vec_sql, (el.serialize_f32(query_vector), max(1, int(k)))
         ).fetchall()
     except sqlite3.Error:
         return []
@@ -932,15 +933,22 @@ def retrieve(
         # Re-number vec_rank after the post-filter so ranks stay 1..n.
         for i, item in enumerate(vec_hits, start=1):
             item["vec_rank"] = i
-        # Inferred lane only: if vec is empty after the post-filter, re-run
-        # vec without the lane filter. Live SoR has ~22 lane=money rows;
-        # vec top-K is mostly lane=NULL. FTS / messages_ids keep the inferred
-        # lane. Explicit --lane stays strict (no retry).
+        # Inferred lane only: if nothing matched, fail-open without the lane
+        # filter so Mac smoke (SDGE / Caddell) still ranks when live `lane`
+        # values are not exactly money/people. Explicit --lane stays strict.
         inferred_only = lane is None and inferred is not None
-        if inferred_only and not vec_hits:
+        if inferred_only and not fts_hits and not vec_hits and not ids_hits:
+            inferred = None
+            fts_hits = fts_search(
+                used, q, k=FTS_K, lane=None, after=after, before=before
+            )
             vec_hits = [
                 item for item in _run_vec(None) if _passes_vec_filters(item, None)
             ]
+            for i, item in enumerate(vec_hits, start=1):
+                item["vec_rank"] = i
+        elif inferred_only and not vec_hits:
+            vec_hits = [item for item in _run_vec(None) if _passes_vec_filters(item, None)]
             for i, item in enumerate(vec_hits, start=1):
                 item["vec_rank"] = i
 
