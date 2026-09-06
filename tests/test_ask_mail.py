@@ -112,23 +112,41 @@ class AuthShapeTests(unittest.TestCase):
 
 
 class SchemaAndCitationTests(unittest.TestCase):
-    def test_citations_follow_rrf_not_unofficial_scores(self):
+    def test_citations_follow_rrf_when_fail_open(self):
         hits = [
             {
                 "message_id": "m1",
                 "rrf": 0.010,
-                "rerank": 0.99,
+                "rerank": None,
                 "subject": "low-rrf",
             },
             {
                 "message_id": "m4",
                 "rrf": 0.020,
-                "rerank": 0.10,
+                "rerank": None,
                 "subject": "high-rrf",
             },
         ]
         self.assertEqual(ask_mail.citations_from_hits(hits), ["m4", "m1"])
         self.assertEqual(ask_mail.rerank_mode_for(hits, enabled=True), "fail_open")
+
+    def test_citations_follow_live_rerank(self):
+        hits = [
+            {
+                "message_id": "m1",
+                "rrf": 0.010,
+                "rerank": 0.99,
+                "subject": "high-rerank",
+            },
+            {
+                "message_id": "m4",
+                "rrf": 0.020,
+                "rerank": 0.10,
+                "subject": "low-rerank",
+            },
+        ]
+        self.assertEqual(ask_mail.citations_from_hits(hits), ["m1", "m4"])
+        self.assertEqual(ask_mail.rerank_mode_for(hits, enabled=True), "crossencoder")
 
     def test_filter_invented_ids(self):
         allowed = ["m1", "m4"]
@@ -142,9 +160,15 @@ class SchemaAndCitationTests(unittest.TestCase):
         self.assertEqual(ask_mail.rerank_mode_for(_hits("m1"), enabled=True), "fail_open")
         self.assertEqual(
             ask_mail.rerank_mode_for(_hits("m1", rerank=0.9), enabled=True),
-            "fail_open",
+            "crossencoder",
         )
-        self.assertEqual(ask_mail.RERANK_MODES, ("fail_open", "none"))
+        self.assertEqual(
+            ask_mail.rerank_mode_for(_hits("m1"), enabled=True, status={"rerank_mode": "off"}),
+            "off",
+        )
+        self.assertEqual(
+            ask_mail.RERANK_MODES, ("crossencoder", "fail_open", "none", "off")
+        )
 
     def test_ask_hits_only_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -587,6 +611,7 @@ class HygieneAndDocsTests(unittest.TestCase):
         self.assertIn("pin ollama embed", ask_docs.lower())
         self.assertIn("scores not claimed", ask_docs.lower())
         self.assertIn("RRF", ask_docs)
+        self.assertIn("CrossEncoder", ask_docs)
         self.assertNotIn("| `scored`", ask_docs)
 
     def test_no_ollama_working_scorer_ready(self):

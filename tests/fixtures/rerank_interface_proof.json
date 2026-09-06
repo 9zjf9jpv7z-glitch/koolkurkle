@@ -1,0 +1,25 @@
+{
+  "needed_signal": "yes/no logits or CrossEncoder.predict floats",
+  "interface": "sentence_transformers.CrossEncoder.predict",
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "alt_model": "tomaarsen/Qwen3-Reranker-0.6B-seq-cls",
+  "instruction": "Given an email search query, retrieve relevant email messages or passages that answer the query",
+  "pairs": [
+    {
+      "label": "relevant",
+      "query": "SDGE bill",
+      "document": "SDGE bill due Friday",
+      "stub_score": 2.4
+    },
+    {
+      "label": "unrelated",
+      "query": "SDGE bill",
+      "document": "horse boarding newsletter",
+      "stub_score": -3.1
+    }
+  ],
+  "ordering": "relevant_score > unrelated_score",
+  "ci": "stub predict when weights unavailable; real CrossEncoder path is wired in rerank_lib.score_documents_crossencoder",
+  "rerank_mode_live": "crossencoder",
+  "rerank_mode_ci": "fail_open"
+}

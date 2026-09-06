@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Local Qwen3-Reranker-0.6B client (MAILROOM.md §6.2 step 7 / PR-7).
+"""In-process CrossEncoder rerank (MAILROOM.md §6.2 / PR-7b).
 
-Talks to Ollama the same way ``embed_lib`` does: urllib POST to a local
-base URL, no API key, no cloud. Callers (``semantic_search.rerank_hits``)
-fail-open on ``RerankError``.
+Default production backend is ``sentence_transformers.CrossEncoder`` on
+``Qwen/Qwen3-Reranker-0.6B`` (MPS when available, CPU otherwise).
+``predict`` floats (or yes/no logits) land on ``Hit.rerank``.
 
-Default tag is ``qwen3-reranker:0.6b`` (override with ``MAILROOM_RERANK_MODEL``).
-Ollama ``/api/generate`` and ``/api/chat`` are the wrong scoring
-interface (last-token yes/no logits). This client is fail-open only —
-not Ready. Community GGUF ≠ scores. See docs/rerank.md.
+Ollama ``/api/generate`` and ``/api/chat`` cannot score Qwen3-Reranker.
+That client remains opt-in (``MAILROOM_RERANK_BACKEND=ollama``) and still
+fail-opens. Community GGUF ≠ scores. See docs/rerank.md.
+
+Callers (``semantic_search.rerank_hits``) fail-open on ``RerankError``:
+keep RRF order, set ``rerank=None``, stderr warning,
+``rerank_mode=fail_open``.
 """
 
 from __future__ import annotations
@@ -27,9 +30,19 @@ except ImportError:  # script dir on sys.path (same as embed_lib callers)
     el = None  # type: ignore[assignment]
 
 
-DEFAULT_RERANK_MODEL = "qwen3-reranker:0.6b"
+BACKEND_CROSSENCODER = "crossencoder"
+BACKEND_OLLAMA = "ollama"
+BACKEND_OFF = "off"
+MODE_FAIL_OPEN = "fail_open"
+MODE_NONE = "none"
+
+DEFAULT_RERANK_BACKEND = BACKEND_CROSSENCODER
+DEFAULT_CE_MODEL = "Qwen/Qwen3-Reranker-0.6B"
+ALT_CE_MODEL = "tomaarsen/Qwen3-Reranker-0.6B-seq-cls"
+DEFAULT_RERANK_MODEL = DEFAULT_CE_MODEL
+DEFAULT_OLLAMA_RERANK_MODEL = "qwen3-reranker:0.6b"
 # Community Ollama port of Qwen/Qwen3-Reranker-0.6B (no official library
-# tag; no untagged latest — pull :Q8_0 or :F16).
+# tag; no untagged latest — pull :Q8_0 or :F16). Not a working scorer.
 COMMUNITY_OLLAMA_TAG = "dengcao/Qwen3-Reranker-0.6B:Q8_0"
 PULL_ONE_LINER = (
     "ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0 && "
@@ -38,32 +51,70 @@ PULL_ONE_LINER = (
 DEFAULT_RERANK_TIMEOUT = 20
 RERANK_TOP = 20
 DOC_CHAR_CAP = 1500
+DEFAULT_MAX_LENGTH = 512
 DEFAULT_KEEP_ALIVE = "30m"
+OPTIONAL_EXTRA = "requirements-rerank.txt"
 
 RERANK_SYSTEM = (
     "Judge whether the Document meets the requirements based on the Query "
     'and the Instruct provided. Note that the answer can only be "yes" or "no".'
 )
 RERANK_INSTRUCT = (
-    "Given a mail search query, retrieve the most relevant email."
+    "Given an email search query, retrieve relevant email messages or "
+    "passages that answer the query"
 )
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _YES_NO = re.compile(r"\b(yes|no)\b", re.IGNORECASE)
 _FLOAT = re.compile(r"[-+]?(?:\d+\.\d+|\.\d+|\d+)(?:[eE][-+]?\d+)?")
+_COMMA_FLOATS = re.compile(
+    r"[-+]?(?:\d+\.\d+|\.\d+|\d+)(?:[eE][-+]?\d+)?\s*,\s*"
+    r"[-+]?(?:\d+\.\d+|\.\d+|\d+)(?:[eE][-+]?\d+)?"
+)
 
 Opener = Callable[..., object]
+PredictFn = Callable[..., Any]
+
+_CE_HOLD: dict[str, Any] = {}
 
 
 class RerankError(RuntimeError):
     """Local reranker failure (never includes secrets or mail bodies)."""
 
 
-def default_rerank_model() -> str:
+def default_rerank_backend() -> str:
+    raw = os.environ.get("MAILROOM_RERANK_BACKEND")
+    if raw and raw.strip():
+        return resolve_backend(raw)
+    return DEFAULT_RERANK_BACKEND
+
+
+def resolve_backend(value: str | None) -> str:
+    raw = (value or default_rerank_backend()).strip().lower()
+    if raw in ("crossencoder", "ce", "st", "sentence_transformers"):
+        return BACKEND_CROSSENCODER
+    if raw in ("ollama",):
+        return BACKEND_OLLAMA
+    if raw in ("off", "none", "0", "false"):
+        return BACKEND_OFF
+    return DEFAULT_RERANK_BACKEND
+
+
+def default_rerank_model(backend: str | None = None) -> str:
     raw = os.environ.get("MAILROOM_RERANK_MODEL")
     if raw and raw.strip():
         return raw.strip()
-    return DEFAULT_RERANK_MODEL
+    resolved = resolve_backend(backend) if backend is not None else default_rerank_backend()
+    if resolved == BACKEND_OLLAMA:
+        return DEFAULT_OLLAMA_RERANK_MODEL
+    return DEFAULT_CE_MODEL
+
+
+def default_rerank_instruction() -> str:
+    raw = os.environ.get("MAILROOM_RERANK_INSTRUCTION")
+    if raw and raw.strip():
+        return raw.strip()
+    return RERANK_INSTRUCT
 
 
 def default_rerank_timeout() -> int:
@@ -80,6 +131,45 @@ def default_ollama_url() -> str:
     if el is not None:
         return el.DEFAULT_OLLAMA_URL
     return "http://127.0.0.1:11434"
+
+
+def rerank_device() -> str:
+    raw = os.environ.get("MAILROOM_RERANK_DEVICE")
+    if raw and raw.strip():
+        return raw.strip()
+    try:
+        import torch
+
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def crossencoder_import_ok() -> bool:
+    """True when the optional extra can be imported. Does not download weights."""
+    try:
+        import sentence_transformers  # noqa: F401
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def is_live_score(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number)
 
 
 def hit_document(hit: dict[str, Any], *, cap: int = DOC_CHAR_CAP) -> str:
@@ -101,7 +191,7 @@ def format_pair(
     *,
     instruction: str | None = None,
 ) -> str:
-    instruct = instruction if instruction is not None else RERANK_INSTRUCT
+    instruct = instruction if instruction is not None else default_rerank_instruction()
     return "<Instruct>: %s\n<Query>: %s\n<Document>: %s" % (
         instruct,
         query or "",
@@ -137,6 +227,82 @@ def _sanitize_err(text: str, limit: int = 180) -> str:
     return collapsed[:limit]
 
 
+def _as_float(value: Any) -> float:
+    if isinstance(value, str):
+        raise RerankError("reranker score is text, not a float")
+    if isinstance(value, bool):
+        raise RerankError("reranker score is a bool, not a float")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RerankError("reranker score is not a number") from exc
+    if not math.isfinite(number):
+        raise RerankError("reranker score is not finite")
+    return number
+
+
+def _yes_no_softmax(yes_logit: Any, no_logit: Any) -> float:
+    yes_s = math.exp(float(yes_logit))
+    no_s = math.exp(float(no_logit))
+    denom = yes_s + no_s
+    if denom <= 0:
+        raise RerankError("yes/no logits have a non-positive softmax denom")
+    return yes_s / denom
+
+
+def coerce_score_vector(raw: Any, expected: int) -> list[float]:
+    """CRM shape gate: one finite float per document.
+
+    Rejects Ollama comma-garbage, a scalar sold as N scores, and nested
+    text. Accepts a list/tuple/ndarray of floats, or per-row yes/no
+    logit pairs.
+    """
+    n = int(expected)
+    if n < 0:
+        raise RerankError("expected score count is negative")
+    if raw is None:
+        raise RerankError("reranker returned no scores")
+    if isinstance(raw, (bytes, bytearray)):
+        raise RerankError("reranker returned bytes, not score floats")
+    if isinstance(raw, str):
+        raise RerankError("reranker returned text, not score floats")
+    if isinstance(raw, dict):
+        raise RerankError("reranker returned an object, not score floats")
+
+    values: Any = raw
+    try:
+        import numpy as np
+
+        if isinstance(raw, np.ndarray):
+            values = raw.tolist()
+    except ImportError:
+        pass
+
+    if isinstance(values, (float, int)) and not isinstance(values, bool):
+        if n == 1:
+            return [_as_float(values)]
+        raise RerankError("reranker returned a scalar, expected %d scores" % n)
+
+    if not isinstance(values, (list, tuple)):
+        raise RerankError("reranker score shape is not a list of floats")
+    if len(values) != n:
+        raise RerankError(
+            "reranker returned %d scores, expected %d" % (len(values), n)
+        )
+
+    out: list[float] = []
+    for item in values:
+        if isinstance(item, str):
+            raise RerankError("reranker score is text, not a float")
+        if isinstance(item, (list, tuple)):
+            if len(item) == 2 and not isinstance(item[0], (list, tuple, str)):
+                out.append(_yes_no_softmax(item[0], item[1]))
+                continue
+            raise RerankError("reranker score is a nested list")
+        out.append(_as_float(item))
+    return out
+
+
 def _post_json(
     url: str,
     payload: dict[str, Any],
@@ -167,8 +333,9 @@ def _post_json(
         reason = getattr(exc, "reason", exc)
         raise RerankError(
             "Cannot reach Ollama at %s (%r). "
-            "Start it locally (`brew services start ollama` or `ollama serve`) "
-            "and pull the reranker: `%s`."
+            "Ollama generate/chat cannot score Qwen3-Reranker; "
+            "default backend is CrossEncoder. "
+            "If you still want the opt-in client: start Ollama and `%s`."
             % (url, reason, PULL_ONE_LINER)
         ) from None
     except TimeoutError:
@@ -239,7 +406,10 @@ def _score_from_yes_no_logprobs(data: dict[str, Any]) -> float | None:
 
 
 def parse_rerank_score(text: str, extra: dict[str, Any] | None = None) -> float:
-    """Map model output to a relevance score in [0, 1]."""
+    """Map model output to a relevance score in [0, 1].
+
+    Comma-separated number lists (Ollama generate garbage) are rejected.
+    """
     if extra:
         from_lp = _score_from_yes_no_logprobs(extra)
         if from_lp is not None:
@@ -247,6 +417,8 @@ def parse_rerank_score(text: str, extra: dict[str, Any] | None = None) -> float:
     cleaned = _strip_think(text)
     if not cleaned:
         raise RerankError("reranker returned empty text")
+    if _COMMA_FLOATS.search(cleaned):
+        raise RerankError("reranker output looks like comma-separated garbage")
     yn = _YES_NO.search(cleaned)
     if yn:
         return 1.0 if yn.group(1).lower() == "yes" else 0.0
@@ -276,6 +448,144 @@ def _response_text(data: dict[str, Any]) -> str:
     return ""
 
 
+def _import_cross_encoder() -> Any:
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError as exc:
+        raise RerankError(
+            "sentence_transformers not installed (optional extra %s). "
+            "Slim installs fail-open."
+            % OPTIONAL_EXTRA
+        ) from exc
+    return CrossEncoder
+
+
+def _candidate_ce_models(explicit: str | None) -> list[str]:
+    if explicit:
+        return [explicit]
+    env = os.environ.get("MAILROOM_RERANK_MODEL")
+    if env and env.strip():
+        return [env.strip()]
+    return [DEFAULT_CE_MODEL, ALT_CE_MODEL]
+
+
+def _load_cross_encoder(
+    model_name: str,
+    instruction: str,
+) -> Any:
+    CrossEncoder = _import_cross_encoder()
+    device = rerank_device()
+    base_kwargs: dict[str, Any] = {
+        "device": device,
+        "trust_remote_code": True,
+        "max_length": DEFAULT_MAX_LENGTH,
+    }
+    try:
+        model = CrossEncoder(
+            model_name,
+            prompts={"query": instruction},
+            default_prompt_name="query",
+            **base_kwargs,
+        )
+    except TypeError:
+        model = CrossEncoder(model_name, **base_kwargs)
+    except Exception as exc:
+        raise RerankError(
+            "CrossEncoder load failed (%s): %s"
+            % (model_name, _sanitize_err(str(exc)))
+        ) from None
+    return model
+
+
+def get_cross_encoder(
+    *,
+    model: str | None = None,
+    instruction: str | None = None,
+    encoder: Any = None,
+) -> Any:
+    if encoder is not None:
+        return encoder
+    instruct = instruction if instruction is not None else default_rerank_instruction()
+    last_err: Exception | None = None
+    for name in _candidate_ce_models(model):
+        key = "%s|%s|%s" % (name, rerank_device(), instruct)
+        held = _CE_HOLD.get(key)
+        if held is not None:
+            return held
+        try:
+            loaded = _load_cross_encoder(name, instruct)
+        except RerankError as exc:
+            last_err = exc
+            continue
+        _CE_HOLD[key] = loaded
+        return loaded
+    if last_err is not None:
+        raise last_err
+    raise RerankError("CrossEncoder load failed")
+
+
+def unload_cross_encoder() -> None:
+    """Drop the in-process reranker before LM Studio 35B generate."""
+    _CE_HOLD.clear()
+    try:
+        import torch
+
+        if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+            torch.mps.empty_cache()
+        cuda = getattr(torch, "cuda", None)
+        if cuda is not None and cuda.is_available():
+            cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _predict_pairs(
+    encoder: Any,
+    pairs: list[tuple[str, str]],
+    instruction: str,
+    predict_fn: PredictFn | None,
+) -> Any:
+    worker = predict_fn
+    if worker is None:
+        if encoder is None or not hasattr(encoder, "predict"):
+            raise RerankError("CrossEncoder has no predict")
+        worker = encoder.predict
+    try:
+        return worker(
+            pairs,
+            prompt=instruction,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+    except TypeError:
+        try:
+            return worker(pairs, show_progress_bar=False)
+        except TypeError:
+            return worker(pairs)
+
+
+def score_documents_crossencoder(
+    query: str,
+    documents: Sequence[str],
+    *,
+    model: str | None = None,
+    instruction: str | None = None,
+    encoder: Any = None,
+    predict_fn: PredictFn | None = None,
+) -> list[float]:
+    """Batch-score (query, snippet) pairs via CrossEncoder.predict."""
+    docs = list(documents)
+    if not docs:
+        return []
+    instruct = instruction if instruction is not None else default_rerank_instruction()
+    pairs = [(query or "", doc or "") for doc in docs]
+    loaded = encoder
+    if predict_fn is None:
+        loaded = get_cross_encoder(model=model, instruction=instruct, encoder=encoder)
+    raw = _predict_pairs(loaded, pairs, instruct, predict_fn)
+    return coerce_score_vector(raw, len(docs))
+
+
 def score_one(
     query: str,
     document: str,
@@ -286,8 +596,8 @@ def score_one(
     timeout: int | None = None,
     instruction: str | None = None,
 ) -> float:
-    """Score one (query, document) pair via local Ollama."""
-    tag = model or default_rerank_model()
+    """Score one (query, document) pair via local Ollama (opt-in backend)."""
+    tag = model or default_rerank_model(BACKEND_OLLAMA)
     base = (ollama_url or default_ollama_url()).rstrip("/")
     wait = int(timeout if timeout is not None else default_rerank_timeout())
     gen_payload: dict[str, Any] = {
@@ -360,7 +670,7 @@ def score_one(
         raise
 
 
-def score_documents(
+def score_documents_ollama(
     query: str,
     documents: Sequence[str],
     *,
@@ -370,10 +680,10 @@ def score_documents(
     timeout: int | None = None,
     instruction: str | None = None,
 ) -> list[float]:
-    """Score each document. Raises on the first failure (caller fail-opens)."""
-    if not documents:
+    docs = list(documents)
+    if not docs:
         return []
-    return [
+    scores = [
         score_one(
             query,
             doc,
@@ -383,5 +693,43 @@ def score_documents(
             timeout=timeout,
             instruction=instruction,
         )
-        for doc in documents
+        for doc in docs
     ]
+    return coerce_score_vector(scores, len(docs))
+
+
+def score_documents(
+    query: str,
+    documents: Sequence[str],
+    *,
+    backend: str | None = None,
+    model: str | None = None,
+    ollama_url: str | None = None,
+    opener: Opener | None = None,
+    timeout: int | None = None,
+    instruction: str | None = None,
+    encoder: Any = None,
+    predict_fn: PredictFn | None = None,
+) -> list[float]:
+    """Score each document. Raises on the first failure (caller fail-opens)."""
+    resolved = resolve_backend(backend)
+    if resolved == BACKEND_OFF:
+        raise RerankError("rerank backend is off")
+    if resolved == BACKEND_OLLAMA:
+        return score_documents_ollama(
+            query,
+            documents,
+            model=model,
+            ollama_url=ollama_url,
+            opener=opener,
+            timeout=timeout,
+            instruction=instruction,
+        )
+    return score_documents_crossencoder(
+        query,
+        documents,
+        model=model,
+        instruction=instruction,
+        encoder=encoder,
+        predict_fn=predict_fn,
+    )

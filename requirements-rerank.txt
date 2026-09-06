@@ -1,0 +1,8 @@
+# Optional extra for live CrossEncoder rerank (PR-7b).
+# Slim / CI installs omit this and fail-open (RRF, rerank=None).
+#
+#   pip install -r requirements-rerank.txt
+#
+# torch is pulled by sentence-transformers. Do not add it to a mandatory
+# base install. MPS is used when available; CPU is fine in CI/cloud.
+sentence-transformers>=3.0.0

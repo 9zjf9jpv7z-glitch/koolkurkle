@@ -508,10 +508,72 @@ class RetrieveHitTests(unittest.TestCase):
             called.append(1)
             return [1.0, 0.0]
 
-        out = ss.rerank_hits(hits, "q", enabled=False, score_fn=score_fn)
+        status: dict = {}
+        out = ss.rerank_hits(
+            hits, "q", enabled=False, score_fn=score_fn, status=status
+        )
         self.assertEqual(called, [])
         self.assertEqual([h["message_id"] for h in out], ["a", "b"])
         self.assertTrue(all(h["rerank"] is None for h in out))
+        self.assertEqual(status.get("rerank_mode"), "none")
+
+    def test_rerank_backend_off_clears_scores(self):
+        hits = [
+            {"message_id": "a", "rrf": 0.2, "subject": "SDGE bill", "snippet": "due"},
+            {"message_id": "b", "rrf": 0.1, "subject": "other", "snippet": "x"},
+        ]
+        status: dict = {}
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            del query, docs
+            return [1.0, 0.0]
+
+        out = ss.rerank_hits(
+            hits,
+            "q",
+            enabled=True,
+            score_fn=score_fn,
+            backend="off",
+            status=status,
+        )
+        self.assertEqual([h["message_id"] for h in out], ["a", "b"])
+        self.assertTrue(all(h["rerank"] is None for h in out))
+        self.assertEqual(status.get("rerank_mode"), "off")
+
+    def test_rerank_success_sets_crossencoder_mode(self):
+        hits = [
+            {"message_id": "a", "rrf": 0.2, "subject": "SDGE bill", "snippet": "due"},
+            {"message_id": "b", "rrf": 0.1, "subject": "other", "snippet": "x"},
+        ]
+        status: dict = {}
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            del query, docs
+            return [0.2, 0.9]
+
+        out = ss.rerank_hits(hits, "q", score_fn=score_fn, status=status)
+        self.assertEqual([h["message_id"] for h in out], ["b", "a"])
+        self.assertEqual(status.get("rerank_mode"), "crossencoder")
+
+    def test_rerank_garbage_shape_fail_opens(self):
+        hits = [
+            {"message_id": "a", "rrf": 0.2, "subject": "SDGE bill", "snippet": "due"},
+            {"message_id": "b", "rrf": 0.1, "subject": "other", "snippet": "x"},
+        ]
+        status: dict = {}
+        warnings: list[str] = []
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            del query, docs
+            return "0.12, 0.45"  # type: ignore[return-value]
+
+        out = ss.rerank_hits(
+            hits, "q", score_fn=score_fn, status=status, log=warnings.append
+        )
+        self.assertEqual([h["message_id"] for h in out], ["a", "b"])
+        self.assertTrue(all(h["rerank"] is None for h in out))
+        self.assertEqual(status.get("rerank_mode"), "fail_open")
+        self.assertTrue(warnings)
 
     def test_rerank_only_fused_top20(self):
         hits = [
@@ -817,6 +879,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("pre-filter", help_text)
         self.assertIn("--no-rerank", help_text)
         self.assertIn("MAILROOM_RERANK_MODEL", help_text)
+        self.assertIn("MAILROOM_RERANK_BACKEND", help_text)
 
     def test_cli_json_retrieve_mocked(self):
         fake = [

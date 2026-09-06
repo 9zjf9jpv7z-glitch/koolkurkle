@@ -49,7 +49,8 @@ do not dual-write.
    present, `content_hash` NULL). Writer lock is per batch, not the rem
    job. Live rem LaunchAgents keep the old text path until EXIT.
 5. **ask_mail** is on-demand (CLI / HTTP / MCP) — not part of the nightly
-   chain. Generate is LM Studio when env is set; rerank is fail-open RRF.
+   chain. Generate is LM Studio when env is set; rerank is CrossEncoder
+   (fail-open if the optional extra is missing).
 
 Stamp: `~/MailArchive/logs/last_daily_rag_ok` is written **only** when the
 full chain exits 0. Missing or ≥ ~24h (15-minute slop so 20:00 calendar
@@ -252,4 +253,4 @@ chain. Recipes, probe, and DoD: **[docs/ask_mail.md](../docs/ask_mail.md)**.
 
 Generate runtime on Mini is **LM Studio** (`/v1/chat/completions`), not
 unnamed Ollama 9B/27B. If LM Studio is down: labeled `fail_open` /
-`hits_only`. Rerank is fail-open RRF today.
+`hits_only`. Rerank default is CrossEncoder; missing extra fail-opens.

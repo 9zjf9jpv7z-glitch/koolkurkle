@@ -24,10 +24,12 @@ restart the 63k backfill or change rem flags.
 
 `retrieve(query, k=20, lane=None, after=None, before=None)` in
 `scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF.
-Rerank today is **fail-open** (`rerank=None`, RRF order,
+Rerank default is in-process **CrossEncoder**
+(`Qwen/Qwen3-Reranker-0.6B`, optional `requirements-rerank.txt`).
+Live floats set `Hit.rerank` and `rerank_mode=crossencoder`. Missing
+torch/weights or predict failure **fail-opens** (`rerank=None`, RRF,
 `rerank_mode=fail_open`). `--no-rerank` forces `rerank_mode=none`.
-Ollama generate/chat is **not** a working scorer. CrossEncoder-on-MPS
-is follow-up. Practice + traps:
+Ollama generate/chat **cannot** score Qwen3-Reranker. Practice + traps:
 **[docs/rerank.md](docs/rerank.md)**,
 **[docs/model-runtime-gates.md](docs/model-runtime-gates.md)**.
 
@@ -36,12 +38,14 @@ is follow-up. Practice + traps:
 non-sending `draft_reply`). Generate is **LM Studio**
 `/v1/chat/completions` when `$MAILROOM_GENERATE_MODEL` is set;
 soft-fail to labeled hits-only if down. Mini generate is the same
-LM Studio runtime (not unnamed Ollama 9B/27B). Smoke is **retrieve,
-then generate** — do not pin Ollama embed 8b and LM Studio chat
-(35B-class) together; unload embed between phases. Recipes + DoD:
+LM Studio runtime (not unnamed Ollama 9B/27B). Smoke is **retrieve+rerank,
+then generate** — do not co-pin Ollama embed 8b, CrossEncoder, and
+LM Studio chat (35B-class); unload embed/rerank between phases.
+Recipes + DoD:
 **[docs/ask_mail.md](docs/ask_mail.md)**.
-`rerank_mode` is fail-open-only until CrossEncoder C (RRF citations;
-scores not claimed).
+`rerank_mode` is `crossencoder` when live floats land, else labeled
+fail-open / none / off (RRF citations; scores not claimed). Do not
+co-pin embed + 35B + rerank.
 
 Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
 vec **post-filter** after KNN. `lane=None` infers money / people / none.
@@ -91,6 +95,11 @@ Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 ```zsh
 # Mini — ask_mail (generate_mode/rerank_mode always labeled)
 ~/MailArchive/.venv/bin/python scripts/ask_mail.py --json 'SDGE bill'
+```
+
+```zsh
+# Mini — CrossEncoder CRM smoke (fail-open-only without weights)
+~/MailArchive/.venv/bin/python scripts/rerank_smoke.py
 ```
 
 ## SoR health (integrity + FTS/hybrid smoke)

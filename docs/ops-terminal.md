@@ -4,8 +4,9 @@ Checklist for Action-required cards a human pastes on a Mac. Keychain
 names and Mini daily install:
 [scripts/README.mailroom-daily.md](../scripts/README.mailroom-daily.md).
 Model/runtime gates (interface proof, neg smoke, fail-open-only):
-[model-runtime-gates.md](model-runtime-gates.md). Rerank is fail-open
-RRF today — not an Ollama working scorer: [rerank.md](rerank.md).
+[model-runtime-gates.md](model-runtime-gates.md). Rerank default is
+CrossEncoder (fail-open if the optional extra is missing); Ollama
+cannot score Qwen3-Reranker: [rerank.md](rerank.md).
 ask_mail probe: [ask_mail.md](ask_mail.md). Mini-only slim:
 [macos-slim/README.md](../macos-slim/README.md).
 
@@ -118,8 +119,9 @@ $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --probe
 ```
 
 Do **not** paste `ollama pull` / `ollama cp` of the community reranker
-as a working-scorer card. GGUF present ≠ scores. Rerank today is
-fail-open RRF ([rerank.md](rerank.md)).
+as a working-scorer card. GGUF present ≠ scores. Rerank default is
+in-process CrossEncoder; missing extra/weights fail-open
+([rerank.md](rerank.md)). Ollama cannot score Qwen3-Reranker.
 
 ## Ollama embed + Little Snitch
 
@@ -139,15 +141,16 @@ ollama pull qwen3-embedding:8b
 ollama pull qwen3-embedding:8b
 ```
 
-## ask_mail sequential smoke (do not pin embed + chat)
+## ask_mail sequential smoke (do not pin embed + rerank + chat)
 
-Retrieve first (Ollama embed `qwen3-embedding:8b`), then **unload**,
-then generate (LM Studio / `$MAILROOM_GENERATE_MODEL`). Do not pin
-embed 8b and LM Studio 35B-class chat in VRAM together. Recipes:
+Retrieve+rerank may keep Ollama embed `qwen3-embedding:8b` resident
+with the in-process CrossEncoder. Then **unload** both before generate
+(LM Studio / `$MAILROOM_GENERATE_MODEL`). Do not co-pin embed +
+CrossEncoder + LM Studio 35B-class chat. Recipes:
 [ask_mail.md](ask_mail.md).
 
 ```zsh
-# MBP — ask_mail phase 1 retrieve (embed only)
+# MBP — ask_mail phase 1 retrieve + rerank (embed resident)
 $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
 ```
 
