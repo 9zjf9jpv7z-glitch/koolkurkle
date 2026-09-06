@@ -73,16 +73,45 @@ the venv once:
 
 ## Keychain
 
-Service **name only**: `mailroom.icloud.app-password`.
+Service **name only** (default): `mailroom.imap.app-password`.
 
-The LaunchAgent wrapper calls `/usr/bin/security find-generic-password -s … -w`
-and exports `IMAP_APP_PASSWORD` for child IMAP scripts. Nothing in this
-repo stores the value. Create the item on the Mini (example — run locally,
-do not paste the secret into chat or git):
+Override the item with `MAILROOM_KEYCHAIN_ITEM` (the LaunchAgent plist sets
+this to the default). The wrapper calls
+`/usr/bin/security find-generic-password -s … -w` and exports
+`IMAP_APP_PASSWORD` for child IMAP scripts. Nothing in this repo stores
+the value.
+
+One-time **read fallback**: if the default name is missing or empty, the
+wrapper tries legacy `mailroom.icloud.app-password` once and warns on
+stderr. It does not fail solely because only the old item exists. A
+`MAILROOM_KEYCHAIN_ITEM` set to any other name is used as-is (no
+legacy fallback).
+
+Create the item on the Mini (example — run locally, do not paste the
+secret into chat or git):
 
 ```zsh
 # you type the password at the prompt; it is not in the command line
-security add-generic-password -a "$USER" -s mailroom.icloud.app-password -w
+security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+```
+
+### MBP / Mini migrate recipe (do not run live cutover yet)
+
+**Do not run live Keychain cutover yet.** This waits for CoS/user after
+merge. Do not create or delete live Keychain items from this PR.
+
+```zsh
+# MBP — Keychain rename (do not run live cutover yet)
+# After CoS/user approval only — type the password at the prompt:
+# security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+# security delete-generic-password -s mailroom.icloud.app-password
+```
+
+```zsh
+# Mini — Keychain rename (do not run live cutover yet)
+# After CoS/user approval only — type the password at the prompt:
+# security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+# security delete-generic-password -s mailroom.icloud.app-password
 ```
 
 ## Install on Mini (LaunchAgent)
