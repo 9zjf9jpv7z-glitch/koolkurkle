@@ -20,16 +20,24 @@ New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
 body). Live rem LaunchAgents keep the old text path until EXIT — do not
 restart the 63k backfill or change rem flags.
 
-## Hybrid retrieve (MAILROOM §6.2 / PR-6 + PR-7)
+## Hybrid retrieve (MAILROOM §6.2 / PR-6 + PR-7) + ask_mail (PR-8)
 
 `retrieve(query, k=20, lane=None, after=None, before=None)` in
-`scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF,
-then scores the fused top-20 with local **Qwen3-Reranker-0.6B**. Query
-embed is instruct_version=v1 / 1024-d only (no 63k re-embed). If the
-reranker is missing/down, retrieve fail-opens (`rerank=None`, RRF order).
-`--no-rerank` forces that stub. Pull + Mini/MBP recipes:
-**[docs/rerank.md](docs/rerank.md)**.
-ask_mail / HTTP / MCP stay out of scope (PR-8).
+`scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF.
+Rerank today is **fail-open** (`rerank=None`, RRF order,
+`rerank_mode=fail_open`). `--no-rerank` forces `rerank_mode=none`.
+Ollama generate/chat is **not** a working scorer. CrossEncoder-on-MPS
+is follow-up. Practice + traps:
+**[docs/rerank.md](docs/rerank.md)**,
+**[docs/model-runtime-gates.md](docs/model-runtime-gates.md)**.
+
+`scripts/ask_mail.py` is the PR-8 CLI + HTTP `127.0.0.1:8743` (`/ask`;
+8744 if bound) + MCP (`ask_mail`, `hybrid_search`, `get_thread`,
+non-sending `draft_reply`). Generate is **LM Studio**
+`/v1/chat/completions` when `$MAILROOM_GENERATE_MODEL` is set;
+soft-fail to labeled hits-only if down. Mini generate is the same
+LM Studio runtime (not unnamed Ollama 9B/27B). Recipes + DoD:
+**[docs/ask_mail.md](docs/ask_mail.md)**.
 
 Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
 vec **post-filter** after KNN. `lane=None` infers money / people / none.
@@ -77,13 +85,8 @@ Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 ```
 
 ```zsh
-# Mini — pull reranker (explicit quant; untagged has no latest)
-ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
-```
-
-```zsh
-# Mini — alias for MAILROOM default tag
-ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
+# Mini — ask_mail (generate_mode/rerank_mode always labeled)
+~/MailArchive/.venv/bin/python scripts/ask_mail.py --json 'SDGE bill'
 ```
 
 ## SoR health (integrity + FTS/hybrid smoke)

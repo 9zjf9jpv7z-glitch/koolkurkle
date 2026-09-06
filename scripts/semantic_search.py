@@ -13,7 +13,7 @@ Pipeline: infer lane + optional date window → FTS5 BM25 top-50 (subject-boost)
 live ``message_embeddings`` (vec0) LEFT JOIN ``chunk_vec_map`` → RRF
 ``1/(60+rank)`` (missing=1000) → recency ``exp(-0.002*age_days)`` unless a
 date window was set → identifier-shaped queries also MATCH ``messages_ids``
-→ Qwen3-Reranker-0.6B over the fused top-20 (fail-open) → thread spine
+→ optional local rerank over the fused top-20 (fail-open RRF today) → thread spine
 expand → dedup by thread_id for the generator pack.
 
 Lane + date filters (documented):
@@ -42,9 +42,10 @@ CLI (Mac smoke; Mini venv — Apple /usr/bin/python3 cannot load sqlite-vec)::
     ~/MailArchive/.venv/bin/python scripts/semantic_search.py 'horse'
 
 ``--cosine`` is the backward-compatible embed_lib.semantic_search path.
-``--no-rerank`` keeps RRF order (smoke / debug). Default rerank model is
-``MAILROOM_RERANK_MODEL`` or ``qwen3-reranker:0.6b`` — see docs/rerank.md.
-Default invocation is hybrid ``retrieve()``.
+``--no-rerank`` keeps RRF order (``rerank_mode=none``). Default today is
+fail-open RRF (lock A). Ollama generate/chat is not a working scorer
+(lock B not shipped). See docs/rerank.md. Default invocation is hybrid
+``retrieve()``.
 
 Query-side v1 prefix only — does not re-embed the 63k document rows.
 """
@@ -1151,10 +1152,10 @@ def format_hits(hits: Iterable[dict]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF + "
-            "Qwen3-Reranker-0.6B). Default is retrieve(); --cosine keeps "
-            "the old KNN path. Query embed instruct_version=v1 dims=1024. "
-            "Rerank fail-open if the local model is down."
+            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF). "
+            "Default is retrieve(); --cosine keeps the old KNN path. "
+            "Query embed instruct_version=v1 dims=1024. "
+            "Rerank is fail-open RRF today (not a Ready scorer)."
         ),
         epilog="Lane/date: FTS pre-filter, vec post-filter.",
     )
@@ -1234,9 +1235,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--rerank-model",
         default=None,
         help=(
-            "Ollama rerank tag (default: $MAILROOM_RERANK_MODEL or %s). "
-            "Pull: %s"
-            % (rl.DEFAULT_RERANK_MODEL, rl.PULL_ONE_LINER)
+            "Optional rerank tag (default: $MAILROOM_RERANK_MODEL or %s). "
+            "Fail-open RRF today — not a Ready scorer. See docs/rerank.md."
+            % rl.DEFAULT_RERANK_MODEL
         ),
     )
     return parser

@@ -6,9 +6,9 @@ base URL, no API key, no cloud. Callers (``semantic_search.rerank_hits``)
 fail-open on ``RerankError``.
 
 Default tag is ``qwen3-reranker:0.6b`` (override with ``MAILROOM_RERANK_MODEL``).
-Ollama has no official library reranker yet; pull the community model with
-an explicit quant (no untagged ``latest``) and alias it (see
-``PULL_ONE_LINER`` / docs/rerank.md).
+Ollama ``/api/generate`` and ``/api/chat`` are the wrong scoring
+interface (last-token yes/no logits). This client is fail-open only —
+not Ready. Community GGUF ≠ scores. See docs/rerank.md.
 """
 
 from __future__ import annotations

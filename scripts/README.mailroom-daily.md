@@ -3,7 +3,7 @@
 Steady-state Mailroom pipeline on **mac-mini.local** (set your macOS login).
 Entirely local: no Grok Bot, no cloud embed, no dual-write over SMB/NFS.
 
-This repo ships the **driver**, **plist**, and **ask_mail stub**. It wires
+This repo ships the **driver**, **plist**, and **ask_mail** CLI. It wires
 scripts that already live in `~/MailArchive/scripts` (headers / FTS / 8pm
 classify+bills / `embed_backfill.py`). Do not treat this PR as a rewrite of
 those tools.
@@ -48,7 +48,8 @@ do not dual-write.
    **or** stale `content_hash`. Does **not** restart live rem rows (meta
    present, `content_hash` NULL). Writer lock is per batch, not the rem
    job. Live rem LaunchAgents keep the old text path until EXIT.
-5. **ask_mail** is a retrieve stub (not part of the nightly chain).
+5. **ask_mail** is on-demand (CLI / HTTP / MCP) — not part of the nightly
+   chain. Generate is LM Studio when env is set; rerank is fail-open RRF.
 
 Stamp: `~/MailArchive/logs/last_daily_rag_ok` is written **only** when the
 full chain exits 0. Missing or ≥ ~24h (15-minute slop so 20:00 calendar
@@ -234,17 +235,21 @@ Prefer LaunchAgent. If you must use cron on the Mini:
 | Embed Python | `~/MailArchive/.venv/bin/python` | Homebrew `/opt/homebrew/bin/python3` on embed PRs |
 | Headers curl | Apple `/usr/bin/curl` | Same |
 
-## ask_mail stub
+## ask_mail (PR-8)
+
+On-demand retrieve + optional LM Studio generate. Not in the nightly
+chain. Recipes, probe, and DoD: **[docs/ask_mail.md](../docs/ask_mail.md)**.
 
 ```zsh
-# Mini — ask_mail stub
-~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py 'receipt from apple'
+# Mini — ask_mail (hits-only unless MAILROOM_GENERATE_MODEL is set)
+~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py --json 'SDGE bill'
 ```
 
 ```zsh
 # Mini — ask_mail FTS-only
-~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py --fts-only --k 5 'invoice'
+~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py --fts-only --k 5 --json 'invoice'
 ```
 
-Hybrid FTS + sqlite-vec (if `embed_lib.py` is beside it). LM Studio is
-**not** wired (`--llm` exits 2 unless `--allow-llm-stub`).
+Generate runtime on Mini is **LM Studio** (`/v1/chat/completions`), not
+unnamed Ollama 9B/27B. If LM Studio is down: labeled `fail_open` /
+`hits_only`. Rerank is fail-open RRF today.

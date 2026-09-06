@@ -15,7 +15,7 @@ Action-required open ⇒ no lock / no writes.
 | Actor | Lock |
 |---|---|
 | IMAP header/body ingest, classify, bills, embed backfill, schema DDL | Yes — wrap with `scripts/with_writer_lock.py` |
-| `ask_mail` retrieve (FTS / sqlite-vec) | No |
+| `ask_mail` retrieve (FTS / sqlite-vec) + short `ask_audit` / draft INSERT | No |
 | Humans inspecting with `sqlite3` read-only | No |
 
 This PR ships the wrapper only. It is **not** wired into `embed_backfill` or the Mini daily driver (live embeds stay up).
