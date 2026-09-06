@@ -77,8 +77,13 @@ Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 ```
 
 ```zsh
-# Mini — once per machine: pull reranker (Little Snitch: docs/ops-terminal.md)
-ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+# Mini — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# Mini — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
 ```
 
 ## SoR health (integrity + FTS/hybrid smoke)

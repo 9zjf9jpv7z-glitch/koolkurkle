@@ -41,6 +41,14 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertIn("Little Snitch", text)
         self.assertIn("registry.ollama.ai:443", text)
         self.assertIn("bad file descriptor", text)
+        self.assertIn("dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
+        self.assertIn(":F16", text)
+        self.assertNotIn("dengcao/Qwen3-Reranker-0.6B &&", text)
+        self.assertIn("ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
+        self.assertIn(
+            "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b",
+            text,
+        )
         self.assertNotIn("/Users/", text)
         self.assertNotIn("-----BEGIN", text)
         self.assertNotIn("ak_live", text)

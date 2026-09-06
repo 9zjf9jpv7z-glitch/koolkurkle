@@ -92,7 +92,30 @@ To change a PR description, edit the first Conversation comment
 
 ## Ollama + Little Snitch
 
+Preferred pull uses an explicit quant tag. The community port has no
+untagged `latest`. `:F16` is also fine. Recipes: [rerank.md](rerank.md).
+
+```zsh
+# Mini — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# Mini — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
+```
+
+```zsh
+# MBP — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# MBP — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
+```
+
 If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
 while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
 Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in
-Little Snitch, then retry the pull. Recipes: [rerank.md](rerank.md).
+Little Snitch, then retry the pull.

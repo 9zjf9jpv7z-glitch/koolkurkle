@@ -7,21 +7,34 @@ missing, times out, or errors, retrieve **fail-opens**: RRF order stays,
 
 Default tag: `qwen3-reranker:0.6b` (`$MAILROOM_RERANK_MODEL` overrides).
 Ollama has no official library reranker yet; pull the community port of
-`Qwen/Qwen3-Reranker-0.6B` and alias it.
+`Qwen/Qwen3-Reranker-0.6B` and alias it. That port has no untagged
+`latest` — pull an explicit quant (`:Q8_0` preferred; `:F16` is also
+fine).
 
-**Pull one-liner** (same on Mini and MBP; set the banner to the machine):
+**Pull + alias** (one command per fence; set the banner to the machine):
 
 ```zsh
-# Mini — pull reranker once (local Ollama; no cloud)
-ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+# Mini — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
 ```
 
 ```zsh
-# MBP — pull reranker once (local Ollama; no cloud)
-ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+# Mini — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
 ```
 
-Or set `MAILROOM_RERANK_MODEL=dengcao/Qwen3-Reranker-0.6B` and skip the `cp`.
+```zsh
+# MBP — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# MBP — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
+```
+
+Or set `MAILROOM_RERANK_MODEL=dengcao/Qwen3-Reranker-0.6B:Q8_0` and skip
+the `cp`.
 
 If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
 while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
@@ -38,8 +51,13 @@ SoR path is `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite`
 ## MBP
 
 ```zsh
-# MBP — pull reranker once (local Ollama; no cloud)
-ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+# MBP — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# MBP — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
 ```
 
 ```zsh
@@ -69,8 +87,13 @@ MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
 ## Mini
 
 ```zsh
-# Mini — pull reranker once (local Ollama; no cloud)
-ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+# Mini — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# Mini — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
 ```
 
 ```zsh
