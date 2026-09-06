@@ -83,9 +83,11 @@ chmod 644 com.user.macos-slim.plist.template root/com.user.macos-slim-root.plist
 ./macos-slim.sh status
 ```
 
-`install` generates `~/Library/LaunchAgents/com.user.macos-slim.plist` from
-the template (`__MACOS_SLIM_SH__` / `__HOME__`) and bootstraps the gui
-domain.
+`install` **generates** `~/Library/LaunchAgents/com.user.macos-slim.plist`
+(`RunAtLoad` + `StartInterval` 300, `tick`) from the checked-in template
+when present, or writes the same plist inline. Then it bootstraps the gui
+domain. Live Mini copies of the user scripts may also live under
+`~/Library/Scripts/macos-slim/` (login Buck).
 
 ## Optional root helper (mdutil only)
 
@@ -100,13 +102,28 @@ Time Machine destinations are skipped via `tmutil destinationinfo`.
 LaunchDaemon `com.user.macos-slim-root` is `RunAtLoad` only and calls the
 helper with `boot`.
 
+`INSTALL-ROOT.sh` stages from the **first** directory that contains both
+`macos-slim-root.sh` and `com.user.macos-slim-root.plist`:
+
+1. Argument `$1` or `MACOS_SLIM_ROOT_STAGE`
+2. **Repo path** — the script's own directory (`macos-slim/root/` in this tree)
+3. **Live Mini** — `~/Library/Scripts/macos-slim/root-stage` (login Buck)
+
 ```zsh
+# from this repo (preferred for a fresh checkout)
 cd /path/to/macos-slim/root
-# helper 700 root:wheel → /usr/local/libexec/
-# plist 644 → /Library/LaunchDaemons/; bootstrap system domain
 sudo ./INSTALL-ROOT.sh
 # optional sudoers.d (USERNAME replaced with the invoking user):
 # INSTALL_SUDOERS=1 sudo ./INSTALL-ROOT.sh
+
+# live Mini stage (as already installed on the Mini)
+# sudo ./INSTALL-ROOT.sh ~/Library/Scripts/macos-slim/root-stage
+```
+
+Dry-run (no sudo, prints resolved paths):
+
+```zsh
+MACOS_SLIM_ROOT_DRY=1 ./INSTALL-ROOT.sh
 ```
 
 sudoers **template only** (`root/macos-slim.sudoers.example`) — placeholder
@@ -116,8 +133,13 @@ sudoers **template only** (`root/macos-slim.sudoers.example`) — placeholder
 USERNAME ALL=(root) NOPASSWD: /usr/local/libexec/macos-slim-root.sh
 ```
 
-`Buck` is an acceptable example name in docs. Nothing in this tree is a
-Keychain secret, app password, or live sqlite DB.
+Mini login example (do not commit a live sudoers.d file):
+
+```
+Buck ALL=(root) NOPASSWD: /usr/local/libexec/macos-slim-root.sh
+```
+
+Nothing in this tree is a Keychain secret, app password, or live sqlite DB.
 
 If `/usr/local/libexec/macos-slim-root.sh` is executable, `apply.sh` /
 `restore.sh` call it (or `sudo -n` when the file exists but is root-only).
