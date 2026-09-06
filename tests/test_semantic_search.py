@@ -484,34 +484,41 @@ class RetrieveHitTests(unittest.TestCase):
         self.assertIn("distance", sql)
 
     def test_vec_search_maps_tuple_rows(self):
-        conn = sqlite3.connect(":memory:")
-        conn.execute(
-            "CREATE TABLE messages (id TEXT PRIMARY KEY, date_utc TEXT, lane TEXT)"
-        )
-        conn.execute(
-            "CREATE TABLE chunk_vec_map (chunk_id TEXT, vec_rowid INTEGER, message_id TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO messages VALUES ('m1', '2026-09-01T00:00:00Z', NULL)"
-        )
+        rec = ss._row_mapping(("m1", 0.12), ss.VEC_KNN_KEYS)
+        self.assertEqual(rec["message_id"], "m1")
+        self.assertEqual(rec["distance"], 0.12)
 
-        class _FakeRows:
+        class _Result:
+            def __init__(self, one=None, many=None):
+                self._one = one
+                self._many = many or []
+
+            def fetchone(self):
+                return self._one
+
             def fetchall(self):
-                return [("m1", 0.12)]
+                return self._many
 
-        real = conn.execute
+            def __iter__(self):
+                return iter(self._many)
 
-        def wrap(sql, params=None):
-            if "message_embeddings" in str(sql) and "MATCH" in str(sql):
-                self.assertNotIn("rowid", str(sql).lower())
-                return _FakeRows()
-            if params is None:
-                return real(sql)
-            return real(sql, params)
+        test = self
 
-        conn.execute("CREATE TABLE message_embeddings (message_id TEXT)")
-        with mock.patch.object(conn, "execute", side_effect=wrap):
-            hits = ss.vec_search(conn, [0.0] * 1024, k=5, dims=1024)
+        class _FakeConn:
+            def execute(self, sql, params=None):
+                text = str(sql)
+                if "sqlite_master" in text:
+                    return _Result(one=(1,))
+                if "PRAGMA" in text:
+                    return _Result(many=[(0, "chunk_id"), (1, "message_id")])
+                if "MATCH" in text:
+                    test.assertNotIn("rowid", text.lower())
+                    return _Result(many=[("m1", 0.12)])
+                if "chunk_vec_map" in text:
+                    return _Result(one=None)
+                return _Result()
+
+        hits = ss.vec_search(_FakeConn(), [0.0] * 1024, k=5, dims=1024)
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["message_id"], "m1")
         self.assertEqual(hits[0]["vec_rank"], 1)
