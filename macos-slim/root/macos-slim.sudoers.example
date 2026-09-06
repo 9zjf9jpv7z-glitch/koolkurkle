@@ -1,0 +1,1 @@
+USERNAME ALL=(root) NOPASSWD: /usr/local/libexec/macos-slim-root.sh
