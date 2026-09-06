@@ -229,6 +229,8 @@ class SudoersAndReadmeTests(unittest.TestCase):
         self.assertIn("chmod 700", text)
         self.assertIn("softwareupdated", text)
         self.assertIn("Do not `arm` or `persist`", text)
+        self.assertIn("ops-terminal.md", text)
+        self.assertIn("# Mini — set your macOS login; cd to this tree", text)
         for label in REQUIRED_AGENTS:
             self.assertIn(label, text)
         self.assertNotIn("EXAMPLE_USER_LOCAL", text)

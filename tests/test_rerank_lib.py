@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -140,6 +141,39 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("MBP", docs)
         self.assertIn("Mini", docs)
         self.assertIn("ollama pull", docs)
+        self.assertIn("Little Snitch", docs)
+        self.assertIn("registry.ollama.ai:443", docs)
+        self.assertIn("ops-terminal.md", docs)
+        self.assertIn(":Q8_0", docs)
+        self.assertIn(":F16", docs)
+        self.assertIn("no untagged", docs.lower())
+
+    def test_community_pull_uses_explicit_quant(self):
+        self.assertEqual(rl.COMMUNITY_OLLAMA_TAG, "dengcao/Qwen3-Reranker-0.6B:Q8_0")
+        self.assertEqual(
+            rl.PULL_ONE_LINER,
+            "ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0 && "
+            "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b",
+        )
+        bare = re.compile(r"dengcao/Qwen3-Reranker-0\.6B(?!:)")
+        human_docs = (
+            ROOT / "docs" / "rerank.md",
+            ROOT / "docs" / "ops-terminal.md",
+            ROOT / "README.md",
+        )
+        for path in human_docs:
+            text = path.read_text(encoding="utf-8")
+            self.assertIsNone(bare.search(text), msg=path.name)
+            self.assertIn("dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
+            self.assertNotIn("dengcao/Qwen3-Reranker-0.6B &&", text)
+            self.assertIn("ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
+            self.assertIn(
+                "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b",
+                text,
+            )
+        lib = (SCRIPTS / "rerank_lib.py").read_text(encoding="utf-8")
+        self.assertIsNone(bare.search(lib))
+        self.assertIn("&&", rl.PULL_ONE_LINER)
 
 
 if __name__ == "__main__":

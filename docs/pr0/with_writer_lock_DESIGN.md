@@ -37,6 +37,9 @@ Never unlink, truncate, or overwrite a lock file that another process still floc
 
 If `~/MailArchive/ACTION_REQUIRED` exists, refuse: take no lock, run no command, write nothing. Clear the file (human) before writers resume.
 
+This is the writer-lock file, not a human Terminal / Action-required card.
+Card practice: [docs/ops-terminal.md](../ops-terminal.md).
+
 Override path: `--action-required-file` or `MAILROOM_ACTION_REQUIRED`.
 
 ## CLI

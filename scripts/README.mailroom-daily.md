@@ -67,7 +67,12 @@ that build). PEP 668: do not `pip install` onto the system Python. Create
 the venv once:
 
 ```zsh
+# Mini — create MailArchive venv
 /opt/homebrew/bin/python3 -m venv ~/MailArchive/.venv
+```
+
+```zsh
+# Mini — install sqlite-vec in the venv
 ~/MailArchive/.venv/bin/python -m pip install sqlite-vec
 ```
 
@@ -85,32 +90,63 @@ One-time **read fallback**: if the default name is missing or empty, the
 wrapper tries legacy `mailroom.icloud.app-password` once and warns on
 stderr. It does not fail solely because only the old item exists. A
 `MAILROOM_KEYCHAIN_ITEM` set to any other name is used as-is (no
-legacy fallback).
+legacy fallback). Prefer the new name; keep the legacy item until IMAP
+smoke PASSes on `mailroom.imap.app-password`.
 
-Create the item on the Mini (example — run locally, do not paste the
-secret into chat or git):
+Human Terminal cards (one machine, one command per fence):
+**[docs/ops-terminal.md](../docs/ops-terminal.md)**.
+
+Create the item locally. Keep `-w` last so the secret is typed only at
+the interactive prompt. Do not paste the secret into chat or git.
 
 ```zsh
-# you type the password at the prompt; it is not in the command line
+# Mini — create IMAP Keychain item (type the secret at the prompt)
 security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
 ```
 
-### MBP / Mini migrate recipe (do not run live cutover yet)
+```zsh
+# Mini — Keychain length check (no secret on stdout)
+security find-generic-password -s mailroom.imap.app-password -w | wc -c
+```
 
-**Do not run live Keychain cutover yet.** This waits for CoS/user after
-merge. Do not create or delete live Keychain items from this PR.
+Apple app-specific passwords are typically ~16–19 characters.
+`security -w` may add a trailing newline in `wc -c`. An ~8-character
+secret will not authenticate to IMAP (Login denied); regenerate at
+appleid.apple.com.
+
+### MBP / Mini migrate recipe
+
+Prefer `mailroom.imap.app-password`. Keep
+`mailroom.icloud.app-password` until IMAP smoke PASSes on the new name.
+Each `security` line is its own fence (one paste).
 
 ```zsh
-# MBP — Keychain rename (do not run live cutover yet)
-# After CoS/user approval only — type the password at the prompt:
-# security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+# MBP — create IMAP Keychain item (type the secret at the prompt)
+security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+```
+
+```zsh
+# MBP — Keychain length check (no secret on stdout)
+security find-generic-password -s mailroom.imap.app-password -w | wc -c
+```
+
+```zsh
+# MBP — delete legacy Keychain item (only after IMAP smoke PASSes)
 # security delete-generic-password -s mailroom.icloud.app-password
 ```
 
 ```zsh
-# Mini — Keychain rename (do not run live cutover yet)
-# After CoS/user approval only — type the password at the prompt:
-# security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+# Mini — create IMAP Keychain item (type the secret at the prompt)
+security add-generic-password -a "$USER" -s mailroom.imap.app-password -w
+```
+
+```zsh
+# Mini — Keychain length check (no secret on stdout)
+security find-generic-password -s mailroom.imap.app-password -w | wc -c
+```
+
+```zsh
+# Mini — delete legacy Keychain item (only after IMAP smoke PASSes)
 # security delete-generic-password -s mailroom.icloud.app-password
 ```
 
@@ -121,16 +157,42 @@ Copy driver files into the silo, then bootstrap for the GUI session:
 ```zsh
 # Mini — substitute __HOME__ with $HOME (launchd does not expand $HOME)
 mkdir -p ~/MailArchive/scripts ~/MailArchive/logs ~/Library/LaunchAgents
+```
+
+```zsh
+# Mini — copy daily driver scripts
 cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py scripts/ask_mail.py \
   ~/MailArchive/scripts/
+```
+
+```zsh
+# Mini — make the wrapper executable
 chmod +x ~/MailArchive/scripts/run_mailroom_daily.sh
+```
+
+```zsh
+# Mini — install LaunchAgent from the __HOME__ template
 sed "s|__HOME__|$HOME|g" launchd/com.mailroom.daily.plist \
   > ~/Library/LaunchAgents/com.mailroom.daily.plist
+```
 
+```zsh
+# Mini — bootout a previous daily agent if present
 launchctl bootout gui/$(id -u)/com.mailroom.daily 2>/dev/null || true
+```
+
+```zsh
+# Mini — bootstrap the daily LaunchAgent
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mailroom.daily.plist
+```
+
+```zsh
+# Mini — enable the daily LaunchAgent
 launchctl enable gui/$(id -u)/com.mailroom.daily
-# optional one-shot:
+```
+
+```zsh
+# Mini — optional one-shot kickstart
 # launchctl kickstart -k gui/$(id -u)/com.mailroom.daily
 ```
 
@@ -146,9 +208,12 @@ Plist:
 Manual:
 
 ```zsh
-# plan only (needs the Mini scripts on disk)
+# Mini — plan only (needs the Mini scripts on disk)
 /usr/bin/python3 ~/MailArchive/scripts/mailroom_daily.py --print-plan
-# ignore stamp
+```
+
+```zsh
+# Mini — ignore stamp
 /usr/bin/python3 ~/MailArchive/scripts/mailroom_daily.py --force
 ```
 
@@ -172,7 +237,12 @@ Prefer LaunchAgent. If you must use cron on the Mini:
 ## ask_mail stub
 
 ```zsh
+# Mini — ask_mail stub
 ~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py 'receipt from apple'
+```
+
+```zsh
+# Mini — ask_mail FTS-only
 ~/MailArchive/.venv/bin/python ~/MailArchive/scripts/ask_mail.py --fts-only --k 5 'invoice'
 ```
 

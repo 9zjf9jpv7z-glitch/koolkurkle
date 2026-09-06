@@ -12,6 +12,9 @@ writer, no SMB/NFS dual-write.
 Install, Keychain **name** (`mailroom.imap.app-password`), Mini vs MBP
 cutover, and the 24h `last_daily_rag_ok` stamp:
 **[scripts/README.mailroom-daily.md](scripts/README.mailroom-daily.md)**.
+Human Terminal cards, Keychain create, privacy generics, PR description
+edit, and Little Snitch:
+**[docs/ops-terminal.md](docs/ops-terminal.md)**.
 
 New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
 body). Live rem LaunchAgents keep the old text path until EXIT — do not
@@ -39,15 +42,48 @@ when `after`/`before` is set. Vec KNN selects `message_id, distance` only
 Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 
 ```zsh
+# Mini — hybrid retrieve
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py 'SDGE bill'
+```
+
+```zsh
+# Mini — hybrid retrieve JSON
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --json --k 20 'Caddell'
+```
+
+```zsh
+# Mini — hybrid retrieve lane + after
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --lane money --after 2024-01-01 'invoice'
+```
+
+```zsh
+# Mini — hybrid retrieve cosine
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --cosine 'SDGE bill'
+```
+
+```zsh
+# Mini — hybrid retrieve without rerank
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --no-rerank 'SDGE bill'
+```
+
+```zsh
+# Mini — hybrid retrieve (horse)
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py 'horse'
-# optional, once: populate messages_ids.identifiers (additive; no column rename)
+```
+
+```zsh
+# Mini — optional, once: populate messages_ids.identifiers (additive; no column rename)
 ~/MailArchive/.venv/bin/python scripts/messages_ids.py --db ~/MailArchive/mailroom.sqlite --backfill
-# once per machine: ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+```
+
+```zsh
+# Mini — pull reranker (explicit quant; untagged has no latest)
+ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+```
+
+```zsh
+# Mini — alias for MAILROOM default tag
+ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
 ```
 
 ## SoR health (integrity + FTS/hybrid smoke)

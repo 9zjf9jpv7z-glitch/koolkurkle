@@ -6,8 +6,9 @@ base URL, no API key, no cloud. Callers (``semantic_search.rerank_hits``)
 fail-open on ``RerankError``.
 
 Default tag is ``qwen3-reranker:0.6b`` (override with ``MAILROOM_RERANK_MODEL``).
-Ollama has no official library reranker yet; pull the community model and
-alias it (see ``PULL_ONE_LINER`` / docs/rerank.md).
+Ollama has no official library reranker yet; pull the community model with
+an explicit quant (no untagged ``latest``) and alias it (see
+``PULL_ONE_LINER`` / docs/rerank.md).
 """
 
 from __future__ import annotations
@@ -27,11 +28,12 @@ except ImportError:  # script dir on sys.path (same as embed_lib callers)
 
 
 DEFAULT_RERANK_MODEL = "qwen3-reranker:0.6b"
-# Community Ollama port of Qwen/Qwen3-Reranker-0.6B (no official library tag).
-COMMUNITY_OLLAMA_TAG = "dengcao/Qwen3-Reranker-0.6B"
+# Community Ollama port of Qwen/Qwen3-Reranker-0.6B (no official library
+# tag; no untagged latest — pull :Q8_0 or :F16).
+COMMUNITY_OLLAMA_TAG = "dengcao/Qwen3-Reranker-0.6B:Q8_0"
 PULL_ONE_LINER = (
-    "ollama pull dengcao/Qwen3-Reranker-0.6B && "
-    "ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b"
+    "ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0 && "
+    "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b"
 )
 DEFAULT_RERANK_TIMEOUT = 20
 RERANK_TOP = 20

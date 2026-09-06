@@ -4,6 +4,9 @@ Read-only integrity + FTS / hybrid smoke for the live Mac mailroom SoR.
 Does not write the DB, does not kill embed jobs, and does not print message
 bodies, Keychain values, or app passwords.
 
+Human Terminal cards (one machine per card, one command per fence):
+[ops-terminal.md](ops-terminal.md).
+
 ## Path
 
 `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite` (`Path.home()` /
