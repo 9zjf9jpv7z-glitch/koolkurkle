@@ -323,6 +323,7 @@ def hybrid_smoke(
             query_vector=query_vector,
             ollama_url=ollama_url,
             expand_threads=False,
+            rerank=False,
         )
     except Exception as exc:  # fail-open hybrid — integrity still reported
         return HybridSmoke(

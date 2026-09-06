@@ -17,12 +17,15 @@ New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
 body). Live rem LaunchAgents keep the old text path until EXIT — do not
 restart the 63k backfill or change rem flags.
 
-## Hybrid retrieve (MAILROOM §6.2 / PR-6)
+## Hybrid retrieve (MAILROOM §6.2 / PR-6 + PR-7)
 
 `retrieve(query, k=20, lane=None, after=None, before=None)` in
-`scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF.
-Query embed is instruct_version=v1 / 1024-d only (no 63k re-embed).
-Rerank is a fail-open stub (`rerank=None`; live Qwen3-Reranker is PR-7).
+`scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF,
+then scores the fused top-20 with local **Qwen3-Reranker-0.6B**. Query
+embed is instruct_version=v1 / 1024-d only (no 63k re-embed). If the
+reranker is missing/down, retrieve fail-opens (`rerank=None`, RRF order).
+`--no-rerank` forces that stub. Pull + Mini/MBP recipes:
+**[docs/rerank.md](docs/rerank.md)**.
 ask_mail / HTTP / MCP stay out of scope (PR-8).
 
 Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
@@ -40,8 +43,11 @@ Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --json --k 20 'Caddell'
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --lane money --after 2024-01-01 'invoice'
 ~/MailArchive/.venv/bin/python scripts/semantic_search.py --cosine 'SDGE bill'
+~/MailArchive/.venv/bin/python scripts/semantic_search.py --no-rerank 'SDGE bill'
+~/MailArchive/.venv/bin/python scripts/semantic_search.py 'horse'
 # optional, once: populate messages_ids.identifiers (additive; no column rename)
 ~/MailArchive/.venv/bin/python scripts/messages_ids.py --db ~/MailArchive/mailroom.sqlite --backfill
+# once per machine: ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
 ```
 
 ## SoR health (integrity + FTS/hybrid smoke)

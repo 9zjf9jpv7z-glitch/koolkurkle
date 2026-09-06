@@ -22,6 +22,7 @@ if str(SCRIPTS) not in sys.path:
 
 import embed_lib as el  # noqa: E402
 import messages_ids as mids  # noqa: E402
+import rerank_lib as rl  # noqa: E402
 import semantic_search as ss  # noqa: E402
 
 
@@ -198,6 +199,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn(["m-sdge", "m-boat"]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         self.assertGreaterEqual(len(hits), 1)
         top = hits[0]
@@ -242,6 +244,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn([]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         ids = [h["message_id"] for h in hits]
         self.assertIn("new", ids)
@@ -260,6 +263,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn(["p1", "m1"]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         ids = [h["message_id"] for h in hits]
         self.assertEqual(ids, ["p1"])
@@ -280,6 +284,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn([]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         self.assertEqual(hits[0]["message_id"], "m1")
 
@@ -325,6 +330,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=vec_fn,
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         ids = [h["message_id"] for h in hits]
         self.assertIn("m-money", ids)
@@ -367,6 +373,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=vec_fn,
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         ids = [h["message_id"] for h in hits]
         self.assertEqual(ids, ["m-money"])
@@ -400,6 +407,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn([]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         self.assertEqual(hits[0]["message_id"], "inv1")
         # Identifier term must beat a missing-ids peer.
@@ -420,17 +428,149 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn([]),
             now=NOW,
             expand_threads=False,
+            rerank=False,
         )
         self.assertEqual(uhits[0]["message_id"], "u1")
 
-    def test_rerank_stub_fail_open(self):
+    def test_rerank_success_sorts_by_score(self):
         hits = [
-            {"message_id": "b", "rrf": 0.1, "rerank": 99},
-            {"message_id": "a", "rrf": 0.2, "rerank": 1},
+            {
+                "message_id": "a",
+                "rrf": 0.30,
+                "subject": "SDGE bill",
+                "snippet": "due Friday",
+            },
+            {
+                "message_id": "b",
+                "rrf": 0.20,
+                "subject": "Harbor news",
+                "snippet": "mooring",
+            },
+            {
+                "message_id": "c",
+                "rrf": 0.10,
+                "subject": "Caddell notes",
+                "snippet": "call back",
+            },
         ]
-        out = ss.rerank_hits(hits, "q")
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            self.assertEqual(query, "Caddell")
+            self.assertEqual(len(docs), 3)
+            self.assertTrue(any("Caddell" in d for d in docs))
+            self.assertFalse(any("SECRET" in d for d in docs))
+            return [0.10, 0.20, 0.90]
+
+        out = ss.rerank_hits(hits, "Caddell", score_fn=score_fn)
+        self.assertEqual([h["message_id"] for h in out], ["c", "b", "a"])
+        self.assertEqual([h["rerank"] for h in out], [0.90, 0.20, 0.10])
+
+    def test_rerank_fail_open_keeps_rrf_order(self):
+        hits = [
+            {
+                "message_id": "b",
+                "rrf": 0.1,
+                "rerank": 99,
+                "subject": "x",
+                "snippet": "do-not-log-this-snippet",
+            },
+            {
+                "message_id": "a",
+                "rrf": 0.2,
+                "rerank": 1,
+                "subject": "y",
+                "snippet": "do-not-log-this-snippet",
+            },
+        ]
+        warnings: list[str] = []
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            del query, docs
+            raise rl.RerankError("model missing")
+
+        out = ss.rerank_hits(hits, "q", score_fn=score_fn, log=warnings.append)
         self.assertEqual([h["message_id"] for h in out], ["b", "a"])
         self.assertTrue(all(h["rerank"] is None for h in out))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("fail-open", warnings[0])
+        self.assertIn("model missing", warnings[0])
+        self.assertNotIn("do-not-log-this-snippet", warnings[0])
+        self.assertNotIn("SECRET", warnings[0])
+
+    def test_rerank_disabled_passthrough(self):
+        hits = [
+            {"message_id": "a", "rrf": 0.2, "subject": "SDGE bill", "snippet": "due"},
+            {"message_id": "b", "rrf": 0.1, "subject": "other", "snippet": "x"},
+        ]
+        called = []
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            called.append(1)
+            return [1.0, 0.0]
+
+        out = ss.rerank_hits(hits, "q", enabled=False, score_fn=score_fn)
+        self.assertEqual(called, [])
+        self.assertEqual([h["message_id"] for h in out], ["a", "b"])
+        self.assertTrue(all(h["rerank"] is None for h in out))
+
+    def test_rerank_only_fused_top20(self):
+        hits = [
+            {
+                "message_id": "m%02d" % i,
+                "rrf": 1.0 - (i * 0.01),
+                "subject": "s",
+                "snippet": "n",
+            }
+            for i in range(25)
+        ]
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            self.assertEqual(len(docs), 20)
+            return [0.5] * len(docs)
+
+        out = ss.rerank_hits(hits, "horse", score_fn=score_fn, top=20)
+        self.assertEqual(len(out), 25)
+        self.assertTrue(all(h["rerank"] == 0.5 for h in out[:20]))
+        self.assertTrue(all(h["rerank"] is None for h in out[20:]))
+        self.assertEqual(out[20]["message_id"], "m20")
+
+    def test_retrieve_applies_rerank_fn(self):
+        conn = _conn()
+        _add(
+            conn,
+            "m-sdge",
+            subject="SDGE bill ready",
+            body="electric invoice",
+            lane="money",
+        )
+        _add(
+            conn,
+            "m-horse",
+            subject="Horse boarding",
+            body="stall reservation",
+            lane="inbox",
+        )
+
+        def score_fn(query: str, docs: list[str]) -> list[float]:
+            del query
+            out = []
+            for doc in docs:
+                out.append(0.99 if "Horse" in doc else 0.01)
+            return out
+
+        hits = ss.retrieve(
+            "horse",
+            k=5,
+            lane="none",
+            conn=conn,
+            vec_hits_fn=_vec_fn(["m-sdge", "m-horse"]),
+            now=NOW,
+            expand_threads=False,
+            rerank=True,
+            rerank_fn=score_fn,
+        )
+        self.assertEqual(hits[0]["message_id"], "m-horse")
+        self.assertAlmostEqual(float(hits[0]["rerank"]), 0.99)
 
     def test_thread_dedup_and_spine(self):
         conn = _conn()
@@ -470,6 +610,7 @@ class RetrieveHitTests(unittest.TestCase):
             vec_hits_fn=_vec_fn(["r4", "solo", "r3", "r2"]),
             now=NOW,
             expand_threads=True,
+            rerank=False,
         )
         pack_ids = []
         seen = set()
@@ -673,6 +814,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("v1", proc.stdout)
         self.assertIn("1024", proc.stdout)
         self.assertIn("pre-filter", proc.stdout)
+        self.assertIn("--no-rerank", proc.stdout)
+        self.assertIn("MAILROOM_RERANK_MODEL", proc.stdout)
 
     def test_cli_json_retrieve_mocked(self):
         fake = [
@@ -701,6 +844,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(row["fts_rank"], 1)
         self.assertEqual(row["vec_rank"], 2)
         self.assertIn("rrf", row)
+
+    def test_cli_no_rerank_flag(self):
+        fake = [
+            {
+                "message_id": "m1",
+                "chunk_id": None,
+                "thread_id": "t1",
+                "date": "2026-09-01T00:00:00Z",
+                "from": "a@x",
+                "subject": "SDGE bill",
+                "snippet": "due",
+                "fts_rank": 1,
+                "vec_rank": 2,
+                "rrf": 0.017,
+                "rerank": None,
+                "lane": "money",
+            }
+        ]
+        stdout = io.StringIO()
+        with mock.patch.object(ss, "retrieve", return_value=fake) as retr:
+            with mock.patch("sys.stdout", stdout):
+                rc = ss.main(["--no-rerank", "--json", "SDGE bill"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(retr.call_args.kwargs.get("rerank"))
 
     def test_cli_cosine_uses_legacy_path(self):
         fake = [
