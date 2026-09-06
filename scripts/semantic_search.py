@@ -22,7 +22,15 @@ Lane + date filters (documented):
     does not filter.
   * FTS: **pre-filter** on ``messages.lane`` / ``messages.date_utc``.
   * Vec: **post-filter** after sqlite-vec KNN (k applies in embedding space).
+  * Inferred lane only (``lane is None``): if vec is empty after the post-
+    filter, re-run vec **without** the lane filter. FTS / ``messages_ids``
+    keep the inferred lane. Explicit ``--lane`` stays strict.
   * Recency decay is skipped when ``after`` or ``before`` is set.
+
+Live ``message_embeddings`` is ``vec0(message_id TEXT PRIMARY KEY, embedding
+float[1024] …)`` — KNN selects only ``message_id, distance`` (no
+``v.rowid``). ``chunk_vec_map`` may be empty; chunk_id is resolved via
+``message_id`` when the map has a row.
 
 CLI (Mac smoke; Mini venv — Apple /usr/bin/python3 cannot load sqlite-vec)::
 
@@ -559,12 +567,24 @@ def resolve_chunk_id(
     *,
     vec_rowid: int | None = None,
 ) -> str | None:
-    """chunk_id from live chunk_vec_map (vec_rowid, else message_id). No invented cols."""
+    """chunk_id from live chunk_vec_map (message_id, else optional vec_rowid).
+
+    Live MBP SoR ``chunk_vec_map`` is empty; vec0 has no usable ``rowid``.
+    Prefer ``message_id``. ``vec_rowid`` is only a fallback when the map
+    actually stores it. No invented columns.
+    """
     if not table_exists(conn, "chunk_vec_map"):
         return None
     cols = set(table_columns(conn, "chunk_vec_map"))
     if "chunk_id" not in cols:
         return None
+    if "message_id" in cols and message_id:
+        row = conn.execute(
+            "SELECT chunk_id FROM chunk_vec_map WHERE message_id = ? LIMIT 1",
+            (message_id,),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
     if vec_rowid is not None and "vec_rowid" in cols:
         row = conn.execute(
             "SELECT chunk_id FROM chunk_vec_map WHERE vec_rowid = ? LIMIT 1",
@@ -572,14 +592,26 @@ def resolve_chunk_id(
         ).fetchone()
         if row and row[0]:
             return str(row[0])
-    if "message_id" in cols:
-        row = conn.execute(
-            "SELECT chunk_id FROM chunk_vec_map WHERE message_id = ? LIMIT 1",
-            (message_id,),
-        ).fetchone()
-        if row and row[0]:
-            return str(row[0])
     return None
+
+
+def _row_mapping(row: Any, keys: Sequence[str]) -> dict[str, Any]:
+    """sqlite3.Row, dict, or plain tuple → dict. Avoids ``dict(tuple)`` ValueError."""
+    if isinstance(row, sqlite3.Row):
+        return dict(row)
+    if isinstance(row, dict):
+        return row
+    return dict(zip(keys, row))
+
+
+# Live vec0: message_id TEXT PRIMARY KEY, embedding float[1024]. No v.rowid.
+VEC_KNN_SQL = (
+    "SELECT v.message_id AS message_id, v.distance AS distance "
+    "FROM message_embeddings AS v "
+    "WHERE v.embedding MATCH ? AND k = ? "
+    "ORDER BY v.distance"
+)
+VEC_KNN_KEYS = ("message_id", "distance")
 
 
 def vec_search(
@@ -600,15 +632,9 @@ def vec_search(
             "Query vector dim %s != %s (instruct_version=%s)."
             % (len(query_vector), dims, QUERY_INSTRUCT_VERSION)
         )
-    vec_sql = (
-        "SELECT v.message_id AS message_id, v.distance AS distance, v.rowid AS vec_rowid "
-        "FROM message_embeddings AS v "
-        "WHERE v.embedding MATCH ? AND k = ? "
-        "ORDER BY v.distance"
-    )
     try:
         rows = conn.execute(
-            vec_sql, (el.serialize_f32(query_vector), max(1, int(k)))
+            VEC_KNN_SQL, (el.serialize_f32(query_vector), max(1, int(k)))
         ).fetchall()
     except sqlite3.Error:
         return []
@@ -617,7 +643,7 @@ def vec_search(
     out: list[dict[str, Any]] = []
     rank = 0
     for row in rows:
-        rec = dict(row)
+        rec = _row_mapping(row, VEC_KNN_KEYS)
         mid = rec.get("message_id")
         if not mid:
             continue
@@ -634,18 +660,12 @@ def vec_search(
             if hi and date_s > hi:
                 continue
         rank += 1
-        vec_rowid = rec.get("vec_rowid")
-        try:
-            vec_rowid_i = int(vec_rowid) if vec_rowid is not None else None
-        except (TypeError, ValueError):
-            vec_rowid_i = None
         out.append(
             {
                 "message_id": str(mid),
                 "vec_rank": rank,
-                "chunk_id": resolve_chunk_id(
-                    conn, str(mid), vec_rowid=vec_rowid_i
-                ),
+                # Live chunk_vec_map is empty; resolve via message_id when present.
+                "chunk_id": resolve_chunk_id(conn, str(mid)),
                 "distance": rec.get("distance"),
             }
         )
@@ -844,7 +864,11 @@ def retrieve(
         owns = True
     assert used is not None
     try:
+        cached_vector: Sequence[float] | None = None
+        vector_ready = False
+
         def _run_vec(active_lane: str | None) -> list[dict[str, Any]]:
+            nonlocal cached_vector, vector_ready
             if vec_hits_fn is not None:
                 return list(
                     vec_hits_fn(
@@ -857,19 +881,21 @@ def retrieve(
                     )
                     or []
                 )
-            vector, _warn = embed_query_vector(
-                q,
-                embed_fn=embed_fn,
-                query_vector=query_vector,
-                model=model,
-                ollama_url=ollama_url,
-                dims=dims,
-            )
-            if vector is None:
+            if not vector_ready:
+                cached_vector, _warn = embed_query_vector(
+                    q,
+                    embed_fn=embed_fn,
+                    query_vector=query_vector,
+                    model=model,
+                    ollama_url=ollama_url,
+                    dims=dims,
+                )
+                vector_ready = True
+            if cached_vector is None:
                 return []
             return vec_search(
                 used,
-                vector,
+                cached_vector,
                 k=VEC_K,
                 dims=dims,
                 lane=active_lane,
@@ -906,15 +932,12 @@ def retrieve(
         # Re-number vec_rank after the post-filter so ranks stay 1..n.
         for i, item in enumerate(vec_hits, start=1):
             item["vec_rank"] = i
-        # Inferred lane only: if nothing matched, fail-open without the lane
-        # filter so Mac smoke (SDGE / Caddell) still ranks when live `lane`
-        # values are not exactly money/people. Explicit --lane stays strict.
+        # Inferred lane only: if vec is empty after the post-filter, re-run
+        # vec without the lane filter. Live SoR has ~22 lane=money rows;
+        # vec top-K is mostly lane=NULL. FTS / messages_ids keep the inferred
+        # lane. Explicit --lane stays strict (no retry).
         inferred_only = lane is None and inferred is not None
-        if inferred_only and not fts_hits and not vec_hits and not ids_hits:
-            inferred = None
-            fts_hits = fts_search(
-                used, q, k=FTS_K, lane=None, after=after, before=before
-            )
+        if inferred_only and not vec_hits:
             vec_hits = [
                 item for item in _run_vec(None) if _passes_vec_filters(item, None)
             ]

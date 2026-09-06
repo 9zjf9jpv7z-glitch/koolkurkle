@@ -173,6 +173,15 @@ def upsert_ids_row(
         )
 
 
+def _row_mapping(row: object, keys: list[str]) -> dict:
+    """sqlite3.Row or plain tuple → dict. ``dict(tuple)`` raises ValueError."""
+    if isinstance(row, sqlite3.Row):
+        return dict(row)
+    if isinstance(row, dict):
+        return row
+    return dict(zip(keys, row))
+
+
 def _row_text(conn: sqlite3.Connection, message_pk: str) -> tuple[str | None, str]:
     header = None
     parts: list[str] = []
@@ -193,7 +202,7 @@ def _row_text(conn: sqlite3.Connection, message_pk: str) -> tuple[str | None, st
             (message_pk,),
         ).fetchone()
         if row is not None:
-            mapping = dict(row) if not isinstance(row, sqlite3.Row) else dict(row)
+            mapping = _row_mapping(row, select)
             header = mapping.get("message_id_header")
             for key in ("subject", "snippet", "from_addr", "cleaned_body", "message_id_header"):
                 val = mapping.get(key)
@@ -210,7 +219,7 @@ def _row_text(conn: sqlite3.Connection, message_pk: str) -> tuple[str | None, st
             (message_pk,),
         ).fetchone()
         if fts is not None:
-            mapping = dict(fts)
+            mapping = _row_mapping(fts, fts_sel)
             for key in ("subject", "body", "from_addr"):
                 val = mapping.get(key)
                 if val:

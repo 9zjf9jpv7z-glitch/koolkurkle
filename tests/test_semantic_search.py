@@ -264,24 +264,95 @@ class RetrieveHitTests(unittest.TestCase):
         ids = [h["message_id"] for h in hits]
         self.assertEqual(ids, ["p1"])
 
-    def test_inferred_lane_fail_open_when_empty(self):
+    def test_inferred_lane_fail_open_vec_only(self):
+        """Inferred money + FTS money hits must not wipe vec (live SoR bug).
+
+        Live: infer_lane('SDGE bill')→money, ~22 lane=money rows, vec top-K
+        is mostly lane=NULL. Fail-open is vec-only; FTS stays lane-filtered.
+        """
         conn = _conn()
         _add(
             conn,
-            "m1",
-            subject="SDGE bill",
-            body="utility invoice",
+            "m-money",
+            subject="SDGE bill ready",
+            body="electric invoice due",
+            lane="money",
+        )
+        _add(
+            conn,
+            "m-null",
+            subject="SDGE statement",
+            body="usage details",
+            lane=None,
+        )
+        _add(
+            conn,
+            "m-inbox",
+            subject="SDGE bill chatter",
+            body="utility invoice gossip",
             lane="inbox",
         )
+        lanes_seen: list[str | None] = []
+
+        def vec_fn(**kwargs):
+            lanes_seen.append(kwargs.get("lane"))
+            # Live KNN top-K is mostly lane=NULL; money-lane rows are sparse.
+            return [{"message_id": "m-null", "vec_rank": 1, "chunk_id": None}]
+
         hits = ss.retrieve(
             "SDGE bill",
-            k=5,
+            k=10,
             conn=conn,
-            vec_hits_fn=_vec_fn([]),
+            vec_hits_fn=vec_fn,
             now=NOW,
             expand_threads=False,
         )
-        self.assertEqual(hits[0]["message_id"], "m1")
+        ids = [h["message_id"] for h in hits]
+        self.assertIn("m-money", ids)
+        self.assertIn("m-null", ids)
+        self.assertNotIn("m-inbox", ids)  # FTS keeps inferred money filter
+        money = next(h for h in hits if h["message_id"] == "m-money")
+        null = next(h for h in hits if h["message_id"] == "m-null")
+        self.assertEqual(money["fts_rank"], 1)
+        self.assertEqual(null["vec_rank"], 1)
+        self.assertEqual(null["fts_rank"], ss.MISSING_RANK)
+        self.assertEqual(lanes_seen, ["money", None])
+
+    def test_explicit_lane_keeps_vec_strict(self):
+        conn = _conn()
+        _add(
+            conn,
+            "m-money",
+            subject="SDGE bill",
+            body="electric invoice",
+            lane="money",
+        )
+        _add(
+            conn,
+            "m-null",
+            subject="SDGE statement",
+            body="usage details",
+            lane=None,
+        )
+        lanes_seen: list[str | None] = []
+
+        def vec_fn(**kwargs):
+            lanes_seen.append(kwargs.get("lane"))
+            return [{"message_id": "m-null", "vec_rank": 1, "chunk_id": None}]
+
+        hits = ss.retrieve(
+            "SDGE bill",
+            k=5,
+            lane="money",
+            conn=conn,
+            vec_hits_fn=vec_fn,
+            now=NOW,
+            expand_threads=False,
+        )
+        ids = [h["message_id"] for h in hits]
+        self.assertEqual(ids, ["m-money"])
+        self.assertEqual(hits[0]["vec_rank"], ss.MISSING_RANK)
+        self.assertEqual(lanes_seen, ["money"])
 
     def test_identifier_uses_messages_ids(self):
         conn = _conn()
@@ -401,6 +472,51 @@ class RetrieveHitTests(unittest.TestCase):
         _add(conn, "m1", subject="x", body="y", chunk_id="c-m1-0")
         self.assertEqual(ss.resolve_chunk_id(conn, "m1"), "c-m1-0")
         self.assertIsNone(ss.resolve_chunk_id(conn, "missing"))
+        # Live SoR: empty map → None; message_id path, not rowid.
+        empty = _conn()
+        _add(empty, "m2", subject="x", body="y")
+        self.assertIsNone(ss.resolve_chunk_id(empty, "m2"))
+
+    def test_vec_knn_sql_has_no_rowid(self):
+        sql = ss.VEC_KNN_SQL.lower()
+        self.assertNotIn("rowid", sql)
+        self.assertIn("message_id", sql)
+        self.assertIn("distance", sql)
+
+    def test_vec_search_maps_tuple_rows(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE messages (id TEXT PRIMARY KEY, date_utc TEXT, lane TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE chunk_vec_map (chunk_id TEXT, vec_rowid INTEGER, message_id TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO messages VALUES ('m1', '2026-09-01T00:00:00Z', NULL)"
+        )
+
+        class _FakeRows:
+            def fetchall(self):
+                return [("m1", 0.12)]
+
+        real = conn.execute
+
+        def wrap(sql, params=None):
+            if "message_embeddings" in str(sql) and "MATCH" in str(sql):
+                self.assertNotIn("rowid", str(sql).lower())
+                return _FakeRows()
+            if params is None:
+                return real(sql)
+            return real(sql, params)
+
+        conn.execute("CREATE TABLE message_embeddings (message_id TEXT)")
+        with mock.patch.object(conn, "execute", side_effect=wrap):
+            hits = ss.vec_search(conn, [0.0] * 1024, k=5, dims=1024)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["message_id"], "m1")
+        self.assertEqual(hits[0]["vec_rank"], 1)
+        self.assertIsNone(hits[0]["chunk_id"])
+        self.assertEqual(hits[0]["distance"], 0.12)
 
     def test_subject_boost_fallback_without_subject_column(self):
         conn = sqlite3.connect(":memory:")
@@ -462,6 +578,51 @@ class MessagesIdsTests(unittest.TestCase):
         text = row[0] or ""
         self.assertIn("123-456-78", text)
         self.assertIn("550e8400-e29b-41d4-a716-446655440000", text)
+
+    def test_row_text_maps_plain_tuples(self):
+        """Live backfill uses default sqlite3 cursor tuples, not Row."""
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE messages (
+              id TEXT PRIMARY KEY,
+              message_id_header TEXT,
+              subject TEXT,
+              snippet TEXT,
+              from_addr TEXT,
+              cleaned_body TEXT
+            );
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+              id UNINDEXED, subject, body, from_addr, tokenize='unicode61'
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "m1",
+                "<a@x>",
+                "APN 123-456-78",
+                "parcel",
+                "a@x",
+                "invoice INV-99",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO messages_fts(id, subject, body, from_addr) VALUES (?, ?, ?, ?)",
+            ("m1", "APN 123-456-78", "invoice INV-99", "a@x"),
+        )
+        header, text = mids._row_text(conn, "m1")
+        self.assertEqual(header, "<a@x>")
+        self.assertIn("APN 123-456-78", text)
+        self.assertIn("INV-99", text)
+        report = mids.backfill_identifiers(conn)
+        self.assertEqual(report["examined"], 1)
+        self.assertGreaterEqual(report["updated"], 1)
+        row = conn.execute(
+            "SELECT identifiers FROM messages_ids WHERE id='m1'"
+        ).fetchone()
+        self.assertIn("123-456-78", row[0] or "")
 
     def test_ci_refuses_default_sor(self):
         with mock.patch.dict("os.environ", {"CI": "1"}, clear=False):
