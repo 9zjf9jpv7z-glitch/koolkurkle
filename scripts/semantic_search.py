@@ -1153,10 +1153,10 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF + "
             "Qwen3-Reranker-0.6B). Default is retrieve(); --cosine keeps "
-            "the old KNN path. Lane/date: FTS pre-filter, vec post-filter. "
-            "Query embed instruct_version=v1 dims=1024. "
+            "the old KNN path. Query embed instruct_version=v1 dims=1024. "
             "Rerank fail-open if the local model is down."
-        )
+        ),
+        epilog="Lane/date: FTS pre-filter, vec post-filter.",
     )
     parser.add_argument(
         "query",

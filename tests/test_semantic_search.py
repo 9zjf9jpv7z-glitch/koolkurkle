@@ -807,15 +807,16 @@ class CliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("--lane", proc.stdout)
-        self.assertIn("--after", proc.stdout)
-        self.assertIn("--before", proc.stdout)
-        self.assertIn("--cosine", proc.stdout)
-        self.assertIn("v1", proc.stdout)
-        self.assertIn("1024", proc.stdout)
-        self.assertIn("pre-filter", proc.stdout)
-        self.assertIn("--no-rerank", proc.stdout)
-        self.assertIn("MAILROOM_RERANK_MODEL", proc.stdout)
+        help_text = " ".join(proc.stdout.split())
+        self.assertIn("--lane", help_text)
+        self.assertIn("--after", help_text)
+        self.assertIn("--before", help_text)
+        self.assertIn("--cosine", help_text)
+        self.assertIn("v1", help_text)
+        self.assertIn("1024", help_text)
+        self.assertIn("pre-filter", help_text)
+        self.assertIn("--no-rerank", help_text)
+        self.assertIn("MAILROOM_RERANK_MODEL", help_text)
 
     def test_cli_json_retrieve_mocked(self):
         fake = [
