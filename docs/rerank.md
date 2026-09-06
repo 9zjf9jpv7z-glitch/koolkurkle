@@ -9,13 +9,25 @@ Default tag: `qwen3-reranker:0.6b` (`$MAILROOM_RERANK_MODEL` overrides).
 Ollama has no official library reranker yet; pull the community port of
 `Qwen/Qwen3-Reranker-0.6B` and alias it.
 
-**Pull one-liner** (same on Mini and MBP):
+**Pull one-liner** (same on Mini and MBP; set the banner to the machine):
 
 ```zsh
+# Mini — pull reranker once (local Ollama; no cloud)
+ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+```
+
+```zsh
+# MBP — pull reranker once (local Ollama; no cloud)
 ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
 ```
 
 Or set `MAILROOM_RERANK_MODEL=dengcao/Qwen3-Reranker-0.6B` and skip the `cp`.
+
+If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
+while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
+Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in Little
+Snitch, then retry the pull. Human Terminal cards:
+[ops-terminal.md](ops-terminal.md).
 
 SoR path is `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite`
 (`Path.home()` / expanduser — no machine home hardcodes). Apple
@@ -28,15 +40,27 @@ SoR path is `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite`
 ```zsh
 # MBP — pull reranker once (local Ollama; no cloud)
 ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+```
 
+```zsh
 # MBP — hybrid retrieve with rerank (default)
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py 'SDGE bill'
+```
+
+```zsh
+# MBP — hybrid retrieve JSON
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py --json --k 20 'Caddell'
+```
+
+```zsh
+# MBP — hybrid retrieve (horse)
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py 'horse'
+```
 
+```zsh
 # MBP — smoke/debug without rerank
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py --no-rerank 'SDGE bill'
@@ -47,15 +71,27 @@ MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
 ```zsh
 # Mini — pull reranker once (local Ollama; no cloud)
 ollama pull dengcao/Qwen3-Reranker-0.6B && ollama cp dengcao/Qwen3-Reranker-0.6B qwen3-reranker:0.6b
+```
 
+```zsh
 # Mini — hybrid retrieve with rerank (default). Copy DB is OK; not a second writer.
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py 'SDGE bill'
+```
+
+```zsh
+# Mini — hybrid retrieve JSON
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py --json --k 20 'Caddell'
+```
+
+```zsh
+# Mini — hybrid retrieve (horse)
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py 'horse'
+```
 
+```zsh
 # Mini — smoke/debug without rerank
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py --no-rerank 'SDGE bill'

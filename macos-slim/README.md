@@ -4,6 +4,9 @@ SIP-safe slimming of Photos / media-analysis / Duet Expert agents on the
 **Mac Mini M4 24GB** (macOS Tahoe ~26.3). This is the Mini-only install
 target. Do **not** install on the MBP by default.
 
+Human Terminal cards (one machine, Mini banner, one command per fence):
+**[docs/ops-terminal.md](../docs/ops-terminal.md)**.
+
 Canonical tree matches the packet installed on the Mini. User scripts live
 here; the optional root helper is mdutil-only.
 
@@ -76,11 +79,27 @@ Copy this tree onto the Mini (do not run from the MBP as the default
 target). Scripts must be `chmod 700`; plists `644`.
 
 ```zsh
-# Mini — set your macOS login; install substitutes $HOME in the LaunchAgent
+# Mini — set your macOS login; cd to this tree
 cd /path/to/macos-slim
+```
+
+```zsh
+# Mini — script modes
 chmod 700 macos-slim.sh apply.sh restore.sh root/macos-slim-root.sh root/INSTALL-ROOT.sh
+```
+
+```zsh
+# Mini — plist modes
 chmod 644 com.user.macos-slim.plist.template root/com.user.macos-slim-root.plist
+```
+
+```zsh
+# Mini — install substitutes $HOME in the LaunchAgent
 ./macos-slim.sh install
+```
+
+```zsh
+# Mini — status after install
 ./macos-slim.sh status
 ```
 
@@ -111,19 +130,29 @@ helper with `boot`.
 3. **Live Mini** — `~/Library/Scripts/macos-slim/root-stage` (your Mini login)
 
 ```zsh
-# from this repo (preferred for a fresh checkout)
+# Mini — from this repo (preferred for a fresh checkout)
 cd /path/to/macos-slim/root
-sudo ./INSTALL-ROOT.sh
-# optional sudoers.d (USERNAME replaced with the invoking user):
-# INSTALL_SUDOERS=1 sudo ./INSTALL-ROOT.sh
+```
 
-# live Mini stage (as already installed on the Mini)
+```zsh
+# Mini — install root helper
+sudo ./INSTALL-ROOT.sh
+```
+
+```zsh
+# Mini — optional sudoers.d (USERNAME replaced with the invoking user)
+# INSTALL_SUDOERS=1 sudo ./INSTALL-ROOT.sh
+```
+
+```zsh
+# Mini — live stage (as already installed on the Mini)
 # sudo ./INSTALL-ROOT.sh ~/Library/Scripts/macos-slim/root-stage
 ```
 
 Dry-run (no sudo, prints resolved paths):
 
 ```zsh
+# Mini — root helper dry-run
 MACOS_SLIM_ROOT_DRY=1 ./INSTALL-ROOT.sh
 ```
 

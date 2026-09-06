@@ -140,6 +140,9 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("MBP", docs)
         self.assertIn("Mini", docs)
         self.assertIn("ollama pull", docs)
+        self.assertIn("Little Snitch", docs)
+        self.assertIn("registry.ollama.ai:443", docs)
+        self.assertIn("ops-terminal.md", docs)
 
 
 if __name__ == "__main__":
