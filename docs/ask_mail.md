@@ -1,7 +1,7 @@
 # ask_mail (PR-8)
 
 CLI + loopback HTTP + MCP over `semantic_search.retrieve()`. Citations
-follow Hit order (RRF when `Hit.rerank` is null). Mail bodies are
+follow RRF order until CrossEncoder C (scores not claimed). Mail bodies are
 **DATA**. Drafts only — never send. `ask_audit` stores query + ids +
 model + host, never bodies.
 
@@ -25,12 +25,53 @@ See [rerank.md](rerank.md) and [model-runtime-gates.md](model-runtime-gates.md).
 Every ask / `/ask` / MCP `ask_mail` object includes:
 
 - `generate_mode`: `lm_studio` | `hits_only` | `fail_open`
-- `rerank_mode`: `fail_open` | `none` | `scored`
+- `rerank_mode`: `fail_open` | `none` (fail-open-only until CrossEncoder C; scores not claimed)
 - `generate_runtime`: `lm_studio` (always named)
-- `citations`: `message_id` list in Hit order (never invented)
+- `citations`: `message_id` list in **RRF** order until CrossEncoder C (never invented)
 - `generate_error`: neg-smoke label or null
 
 `fail_open` / `none` / `hits_only` are explicit. Never silent.
+`rerank_mode` is **fail-open-only until lock C**. Citations are RRF.
+Unofficial `Hit.rerank` numbers do not reorder citations and are not
+a Ready claim.
+
+## Sequential smoke (retrieve, then generate)
+
+Do **not** pin Ollama embed `qwen3-embedding:8b` and LM Studio chat
+(35B-class / `$MAILROOM_GENERATE_MODEL`) in VRAM at the same time.
+Smoke is two phases with an unload in between.
+
+```zsh
+# MBP — phase 1: retrieve only (embed 8b; rerank_mode=fail_open)
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
+```
+
+```zsh
+# MBP — unload Ollama embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+```zsh
+# MBP — phase 2: generate (LM Studio). --fts-only avoids reloading embed 8b
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+MAILROOM_GENERATE_MODEL="$MAILROOM_GENERATE_MODEL" \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase generate --fts-only --json 'SDGE bill'
+```
+
+```zsh
+# Mini — phase 1: retrieve only (same sequential rule)
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
+```
+
+```zsh
+# Mini — unload Ollama embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+`--no-generate` is the same as `--phase retrieve`. `--llm` is the same
+as `--phase generate`. If LM Studio is down, `generate_mode=fail_open`.
 
 ## Interface proof (acceptance)
 

@@ -1306,15 +1306,13 @@ def main(argv: list[str] | None = None) -> int:
                 "\n# cosine KNN only — hybrid retrieve is the default CLI.\n"
             )
         else:
-            scored = any(h.get("rerank") is not None for h in hits)
             if args.no_rerank:
-                rerank_note = "rerank=off (--no-rerank)"
-            elif scored:
-                rerank_note = "rerank=%s" % (
-                    args.rerank_model or rl.default_rerank_model()
-                )
+                rerank_note = "rerank=off (--no-rerank); rerank_mode=none"
             else:
-                rerank_note = "rerank=None (fail-open)"
+                rerank_note = (
+                    "rerank=None (fail-open-only until CrossEncoder C; "
+                    "scores not claimed)"
+                )
             sys.stderr.write(
                 "\n# hybrid retrieve: FTS pre-filter + vec post-filter; "
                 "%s. instruct_version=%s dims=%s\n"

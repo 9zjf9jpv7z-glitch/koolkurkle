@@ -196,21 +196,35 @@ def _empty_vec(**_kwargs: Any) -> list[dict[str, Any]]:
     return []
 
 
+RERANK_MODES = ("fail_open", "none")
+
+
 def rerank_mode_for(hits: Iterable[dict[str, Any]], *, enabled: bool) -> str:
-    """Label rerank. fail-open/none are never silent."""
+    """Label rerank until lock C (CrossEncoder). Scores are not claimed.
+
+    Public values are ``fail_open`` (default) or ``none`` (``--no-rerank``).
+    Unofficial ``Hit.rerank`` numbers do not change the label.
+    """
     if not enabled:
         return "none"
-    for hit in hits:
-        if hit.get("rerank") is not None:
-            return "scored"
     return "fail_open"
 
 
 def citations_from_hits(hits: list[dict[str, Any]]) -> list[str]:
-    """Hit order only. Never invent message_ids."""
+    """RRF citations until CrossEncoder C. Never invent message_ids.
+
+    Unofficial ``Hit.rerank`` values do not reorder citations.
+    """
+    ranked = sorted(
+        hits,
+        key=lambda h: (
+            -float(h.get("rrf") or 0.0),
+            str(h.get("message_id") or h.get("id") or ""),
+        ),
+    )
     out: list[str] = []
     seen: set[str] = set()
-    for hit in hits:
+    for hit in ranked:
         mid = hit.get("message_id") or hit.get("id")
         if not mid:
             continue
@@ -594,11 +608,8 @@ def _base_response(
         "generate_host": host or default_host(),
         "generate_error": generate_error,
         "rerank_note": (
-            "RRF order; Hit.rerank is null (fail-open). "
-            "CrossEncoder-on-MPS is follow-up (lock C). "
-            "Ollama generate/chat is not a working scorer."
-            if rerank_mode in ("fail_open", "none")
-            else "Hit.rerank present; unofficial — not Ready (lock C is CrossEncoder)."
+            "fail-open-only until CrossEncoder C. Citations are RRF. "
+            "Scores are not claimed. Ollama generate/chat is not a working scorer."
         ),
     }
 
@@ -1419,6 +1430,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force generate_mode=hits_only even if MAILROOM_GENERATE_MODEL is set.",
     )
     parser.add_argument(
+        "--phase",
+        choices=("retrieve", "generate"),
+        default=None,
+        help=(
+            "Sequential smoke: retrieve (hits-only) then generate. "
+            "Do not pin Ollama embed 8b and LM Studio chat (35B-class) together. "
+            "Unload embed between phases. See docs/ask_mail.md."
+        ),
+    )
+    parser.add_argument(
         "--llm",
         action="store_true",
         help="Attempt LM Studio generate (fail-open if down). Same as env-set default.",
@@ -1477,9 +1498,10 @@ def build_parser() -> argparse.ArgumentParser:
 def _cli_config(args: argparse.Namespace) -> dict[str, Any]:
     db = Path(args.db).expanduser() if args.db else default_db_path()
     generate: bool | None
-    if args.no_generate:
+    phase = getattr(args, "phase", None)
+    if args.no_generate or phase == "retrieve":
         generate = False
-    elif args.llm:
+    elif args.llm or phase == "generate":
         generate = True
     else:
         generate = None

@@ -138,3 +138,42 @@ ollama pull qwen3-embedding:8b
 # MBP — official embed pull (not a reranker)
 ollama pull qwen3-embedding:8b
 ```
+
+## ask_mail sequential smoke (do not pin embed + chat)
+
+Retrieve first (Ollama embed `qwen3-embedding:8b`), then **unload**,
+then generate (LM Studio / `$MAILROOM_GENERATE_MODEL`). Do not pin
+embed 8b and LM Studio 35B-class chat in VRAM together. Recipes:
+[ask_mail.md](ask_mail.md).
+
+```zsh
+# MBP — ask_mail phase 1 retrieve (embed only)
+$HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
+```
+
+```zsh
+# MBP — unload embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+```zsh
+# Mini — unload embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+## Heavy packets
+
+Canonical on the Mac Desktop: `$HOME/Desktop/Heavy-Bot/to-bot`.
+Before a box / cloud agent reads a packet, sync that directory into
+`/workspace`. A Desktop file that was never synced is not visible to
+the box. Do not `git add` packet contents.
+
+```zsh
+# MBP — canonical Heavy packets (Desktop)
+ls "$HOME/Desktop/Heavy-Bot/to-bot"
+```
+
+```zsh
+# MBP — sync Heavy packets into /workspace before box read
+rsync -a "$HOME/Desktop/Heavy-Bot/to-bot/" /workspace/
+```

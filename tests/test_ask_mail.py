@@ -112,9 +112,23 @@ class AuthShapeTests(unittest.TestCase):
 
 
 class SchemaAndCitationTests(unittest.TestCase):
-    def test_citations_follow_hit_order(self):
-        hits = _hits("m4", "m1")
+    def test_citations_follow_rrf_not_unofficial_scores(self):
+        hits = [
+            {
+                "message_id": "m1",
+                "rrf": 0.010,
+                "rerank": 0.99,
+                "subject": "low-rrf",
+            },
+            {
+                "message_id": "m4",
+                "rrf": 0.020,
+                "rerank": 0.10,
+                "subject": "high-rrf",
+            },
+        ]
         self.assertEqual(ask_mail.citations_from_hits(hits), ["m4", "m1"])
+        self.assertEqual(ask_mail.rerank_mode_for(hits, enabled=True), "fail_open")
 
     def test_filter_invented_ids(self):
         allowed = ["m1", "m4"]
@@ -128,8 +142,9 @@ class SchemaAndCitationTests(unittest.TestCase):
         self.assertEqual(ask_mail.rerank_mode_for(_hits("m1"), enabled=True), "fail_open")
         self.assertEqual(
             ask_mail.rerank_mode_for(_hits("m1", rerank=0.9), enabled=True),
-            "scored",
+            "fail_open",
         )
+        self.assertEqual(ask_mail.RERANK_MODES, ("fail_open", "none"))
 
     def test_ask_hits_only_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -476,6 +491,22 @@ class CliTests(unittest.TestCase):
         rc = ask_mail.main(["--db", "/no/such/mailroom.sqlite", "--no-generate", "hello"])
         self.assertEqual(rc, 2)
 
+    def test_cli_phase_retrieve(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            _make_db(db)
+            stdout = io.StringIO()
+            with mock.patch.object(ask_mail.ss, "retrieve", side_effect=_fake_retrieve(["m4", "m1"])):
+                with mock.patch("sys.stdout", stdout):
+                    rc = ask_mail.main(
+                        ["--db", str(db), "--phase", "retrieve", "--json", "invoice"]
+                    )
+        self.assertEqual(rc, 0)
+        row = json.loads(stdout.getvalue())
+        self.assertEqual(row["generate_mode"], "hits_only")
+        self.assertEqual(row["rerank_mode"], "fail_open")
+        self.assertEqual(row["citations"], ["m4", "m1"])
+
     def test_cli_json_hits_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "mailroom.sqlite"
@@ -550,6 +581,13 @@ class HygieneAndDocsTests(unittest.TestCase):
         self.assertNotIn("9B/27B if present", ask_docs)
         self.assertIn("LM Studio", ask_docs)
         self.assertIn("not unnamed ollama", ask_docs.lower())
+        self.assertIn("--phase retrieve", ask_docs)
+        self.assertIn("--phase generate", ask_docs)
+        self.assertIn("ollama stop qwen3-embedding:8b", ask_docs)
+        self.assertIn("pin ollama embed", ask_docs.lower())
+        self.assertIn("scores not claimed", ask_docs.lower())
+        self.assertIn("RRF", ask_docs)
+        self.assertNotIn("| `scored`", ask_docs)
 
     def test_no_ollama_working_scorer_ready(self):
         texts = [

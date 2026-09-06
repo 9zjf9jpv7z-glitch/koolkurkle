@@ -25,8 +25,9 @@ Human Terminal cards (one machine, one command per fence):
    Ollama `/api/generate` and `/api/chat` are the **wrong** rerank
    interface (lock B not shipped).
 4. **fail-open-only must be labeled** — every ask_mail response
-   includes `generate_mode` and `rerank_mode`. `fail_open` / `none` /
-   `hits_only` are explicit. Never silent.
+   includes `generate_mode` and `rerank_mode`. Until CrossEncoder C,
+   `rerank_mode` is `fail_open` or `none` only (RRF citations; scores
+   not claimed). `hits_only` is explicit. Never silent.
 5. **CoS withholds merge AR** without trap 1 PASS **or** an explicit
    **fail-open-only** label on the PR.
 

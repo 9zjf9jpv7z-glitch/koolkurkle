@@ -39,8 +39,10 @@ Those install fences are removed on purpose.
 
 ## Today: fail-open RRF
 
-`rerank_mode=fail_open` (default) or `none` (`--no-rerank`). Citations
-in ask_mail follow Hit order, which is RRF when `Hit.rerank` is null.
+**fail-open-only until CrossEncoder C.** `rerank_mode` is `fail_open`
+(default) or `none` (`--no-rerank`) — never silent, never `scored`.
+Citations are **RRF**. Unofficial `Hit.rerank` numbers are not claimed
+as scores and do not reorder ask_mail citations.
 
 Mini generate/fallback runtime for **answers** is **LM Studio**
 (`/v1/chat/completions`), not unnamed Ollama 9B/27B chat. Mini Ollama
@@ -74,7 +76,7 @@ SoR path is `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite`
 These recipes are **fail-open RRF smoke**, not a working-scorer demo.
 
 ```zsh
-# MBP — hybrid retrieve (fail-open RRF; rerank_mode=fail_open unless scores land)
+# MBP — hybrid retrieve (fail-open-only until CrossEncoder C; RRF citations)
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/semantic_search.py 'SDGE bill'
 ```

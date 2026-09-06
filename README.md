@@ -36,8 +36,12 @@ is follow-up. Practice + traps:
 non-sending `draft_reply`). Generate is **LM Studio**
 `/v1/chat/completions` when `$MAILROOM_GENERATE_MODEL` is set;
 soft-fail to labeled hits-only if down. Mini generate is the same
-LM Studio runtime (not unnamed Ollama 9B/27B). Recipes + DoD:
+LM Studio runtime (not unnamed Ollama 9B/27B). Smoke is **retrieve,
+then generate** — do not pin Ollama embed 8b and LM Studio chat
+(35B-class) together; unload embed between phases. Recipes + DoD:
 **[docs/ask_mail.md](docs/ask_mail.md)**.
+`rerank_mode` is fail-open-only until CrossEncoder C (RRF citations;
+scores not claimed).
 
 Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
 vec **post-filter** after KNN. `lane=None` infers money / people / none.
