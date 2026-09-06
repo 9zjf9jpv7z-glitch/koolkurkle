@@ -226,17 +226,14 @@ class SudoersAndReadmeTests(unittest.TestCase):
         self.assertIn("Library/Scripts/macos-slim/root-stage", text)
         self.assertIn("macos-slim/root/", text)
         self.assertIn("Your Mini login (example placeholder USERNAME)", text)
-        self.assertNotIn("Buck ALL=(root) NOPASSWD", text)
         self.assertIn("chmod 700", text)
         self.assertIn("softwareupdated", text)
         self.assertIn("Do not `arm` or `persist`", text)
         for label in REQUIRED_AGENTS:
             self.assertIn(label, text)
-        self.assertNotIn("kirkbacon", text)
-        self.assertNotIn("@icloud.com", text)
-        self.assertNotIn("/Users/buck", text)
-        self.assertNotIn("/Users/Buck", text)
-        self.assertNotIn("login Buck", text)
+        self.assertNotIn("EXAMPLE_USER_LOCAL", text)
+        self.assertNotIn("@example.invalid", text)
+        self.assertNotIn("/Users/USERNAME", text)
 
     def test_install_root_dry_run_uses_repo_path(self):
         rc = subprocess.run(

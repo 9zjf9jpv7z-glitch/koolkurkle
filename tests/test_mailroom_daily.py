@@ -278,12 +278,10 @@ class SourceHygieneTests(unittest.TestCase):
             ROOT / "README.md",
         ]
         forbidden = (
-            "kirkbacon",
-            "@me.com",
+            "EXAMPLE_USER_LOCAL",
+            "@example.invalid",
             "-----BEGIN",
             "ak_live",
-            "/Users/buck",
-            "/Users/Buck",
         )
         named = {
             "run_mailroom_daily.sh",

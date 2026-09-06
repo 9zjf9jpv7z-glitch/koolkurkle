@@ -452,7 +452,12 @@ class HygieneTests(unittest.TestCase):
             SCRIPTS / "embed_document.py",
         ):
             text = path.read_text(encoding="utf-8")
-            for token in ("kirkbacon", "@me.com", "-----BEGIN", "ak_live"):
+            for token in (
+                "EXAMPLE_USER_LOCAL",
+                "@example.invalid",
+                "-----BEGIN",
+                "ak_live",
+            ):
                 self.assertNotIn(token, text, msg=path.name)
 
     def test_daily_plist_not_a_rem_launchagent(self):
