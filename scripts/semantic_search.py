@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MAILROOM.md §6.2 hybrid retrieve (Heavy PR-6).
+"""MAILROOM.md §6.2 hybrid retrieve (Heavy PR-6 + PR-7 rerank).
 
 Locked API::
 
@@ -13,8 +13,8 @@ Pipeline: infer lane + optional date window → FTS5 BM25 top-50 (subject-boost)
 live ``message_embeddings`` (vec0) LEFT JOIN ``chunk_vec_map`` → RRF
 ``1/(60+rank)`` (missing=1000) → recency ``exp(-0.002*age_days)`` unless a
 date window was set → identifier-shaped queries also MATCH ``messages_ids``
-→ rerank stub (None, fail-open) → thread spine expand → dedup by thread_id
-for the generator pack.
+→ Qwen3-Reranker-0.6B over the fused top-20 (fail-open) → thread spine
+expand → dedup by thread_id for the generator pack.
 
 Lane + date filters (documented):
   * ``lane=None`` infers money (money words) / people (name-shaped) / none.
@@ -38,8 +38,12 @@ CLI (Mac smoke; Mini venv — Apple /usr/bin/python3 cannot load sqlite-vec)::
     ~/MailArchive/.venv/bin/python scripts/semantic_search.py --json --k 20 'Caddell'
     ~/MailArchive/.venv/bin/python scripts/semantic_search.py --lane money --after 2024-01-01 'invoice'
     ~/MailArchive/.venv/bin/python scripts/semantic_search.py --cosine 'SDGE bill'
+    ~/MailArchive/.venv/bin/python scripts/semantic_search.py --no-rerank 'SDGE bill'
+    ~/MailArchive/.venv/bin/python scripts/semantic_search.py 'horse'
 
 ``--cosine`` is the backward-compatible embed_lib.semantic_search path.
+``--no-rerank`` keeps RRF order (smoke / debug). Default rerank model is
+``MAILROOM_RERANK_MODEL`` or ``qwen3-reranker:0.6b`` — see docs/rerank.md.
 Default invocation is hybrid ``retrieve()``.
 
 Query-side v1 prefix only — does not re-embed the 63k document rows.
@@ -49,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import re
@@ -64,6 +69,7 @@ if str(SCRIPTS) not in sys.path:
 
 import embed_lib as el  # noqa: E402
 import messages_ids as mids  # noqa: E402
+import rerank_lib as rl  # noqa: E402
 from embed_document import INSTRUCT_VERSION  # noqa: E402
 
 DEFAULT_DB = el.DEFAULT_DB
@@ -177,6 +183,8 @@ _FROM_NAME = re.compile(
 
 VecHitsFn = Callable[..., list[dict]]
 EmbedFn = el.EmbedFn
+RerankFn = Callable[[str, Sequence[str]], Sequence[float]]
+RERANK_TOP = rl.RERANK_TOP
 
 
 class RetrieveError(RuntimeError):
@@ -706,12 +714,83 @@ def embed_query_vector(
     return adapted, None
 
 
-def rerank_hits(hits: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    """PR-7 live Qwen3-Reranker is out of scope. Fail-open: pass-through RRF order."""
-    del query
+def _rerank_warn(message: str, log: Callable[[str], None] | None) -> None:
+    """Clear fail-open warning. No secrets, no mail bodies, no snippets."""
+    line = "rerank fail-open: %s; keeping RRF order" % message
+    if log is not None:
+        log(line)
+        return
+    logging.getLogger("mailroom.rerank").warning(line)
+    sys.stderr.write("warning: %s\n" % line)
+
+
+def _clear_rerank(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for hit in hits:
         hit["rerank"] = None
     return hits
+
+
+def rerank_hits(
+    hits: list[dict[str, Any]],
+    query: str,
+    *,
+    enabled: bool = True,
+    score_fn: RerankFn | None = None,
+    model: str | None = None,
+    ollama_url: str | None = None,
+    top: int = RERANK_TOP,
+    timeout: int | None = None,
+    log: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Score the fused top-N Hits with Qwen3-Reranker-0.6B.
+
+    On success, writes ``rerank`` and sorts those Hits by score (then RRF).
+    Fail-open: model missing / timeout / error → ``rerank=None``, keep RRF
+    order, log a warning (no secrets, no bodies).
+    """
+    if not hits:
+        return hits
+    if not enabled:
+        return _clear_rerank(hits)
+
+    window = max(1, int(top))
+    head = list(hits[:window])
+    tail = list(hits[window:])
+    docs = [rl.hit_document(hit) for hit in head]
+    worker = score_fn
+    try:
+        if worker is None:
+            scores = rl.score_documents(
+                query,
+                docs,
+                model=model,
+                ollama_url=ollama_url or el.DEFAULT_OLLAMA_URL,
+                timeout=timeout,
+            )
+        else:
+            scores = list(worker(query, docs))
+        if len(scores) != len(head):
+            raise rl.RerankError(
+                "reranker returned %d scores, expected %d" % (len(scores), len(head))
+            )
+        for hit, score in zip(head, scores):
+            hit["rerank"] = float(score)
+    except Exception as exc:
+        reason = str(exc).strip() or exc.__class__.__name__
+        _rerank_warn(reason, log)
+        _clear_rerank(hits)
+        return hits
+
+    for hit in tail:
+        hit["rerank"] = None
+    head.sort(
+        key=lambda h: (
+            -float(h.get("rerank") if h.get("rerank") is not None else 0.0),
+            -float(h.get("rrf") or 0.0),
+            str(h.get("message_id") or ""),
+        )
+    )
+    return head + tail
 
 
 def _thread_id_key(hit: dict[str, Any]) -> str:
@@ -722,7 +801,7 @@ def _thread_id_key(hit: dict[str, Any]) -> str:
 
 
 def _dedup_generator_pack(hits: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
-    """Keep the best-rrf Hit per thread_id (generator pack). Citations stay on Hits."""
+    """Keep the first Hit per thread_id (already rerank/RRF sorted). Citations stay on Hits."""
     pack: list[dict[str, Any]] = []
     seen: set[str] = set()
     for hit in hits:
@@ -840,8 +919,12 @@ def retrieve(
     extension_path: str | None = None,
     now: datetime | None = None,
     expand_threads: bool = True,
+    rerank: bool = True,
+    rerank_fn: RerankFn | None = None,
+    rerank_model: str | None = None,
+    rerank_top: int = RERANK_TOP,
 ) -> list[dict[str, Any]]:
-    """Hybrid FTS + vec + RRF retrieve. See module docstring for filters."""
+    """Hybrid FTS + vec + RRF retrieve, then optional local rerank."""
     q = (query or "").strip()
     if not q:
         raise RetrieveError("Query text is empty.")
@@ -995,7 +1078,15 @@ def retrieve(
             rec["rerank"] = None
             ranked.append(rec)
         ranked.sort(key=lambda h: (-float(h["rrf"]), str(h.get("message_id"))))
-        ranked = rerank_hits(ranked, q)
+        ranked = rerank_hits(
+            ranked,
+            q,
+            enabled=bool(rerank),
+            score_fn=rerank_fn,
+            model=rerank_model,
+            ollama_url=ollama_url,
+            top=rerank_top,
+        )
         pack = _dedup_generator_pack(ranked, k)
         ranked_by_id = {str(h["message_id"]): h for h in ranked}
         if expand_threads:
@@ -1060,11 +1151,12 @@ def format_hits(hits: Iterable[dict]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF). "
-            "Default is retrieve(); --cosine keeps the old KNN path. "
-            "Lane/date: FTS pre-filter, vec post-filter. "
-            "Query embed instruct_version=v1 dims=1024."
-        )
+            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF + "
+            "Qwen3-Reranker-0.6B). Default is retrieve(); --cosine keeps "
+            "the old KNN path. Query embed instruct_version=v1 dims=1024. "
+            "Rerank fail-open if the local model is down."
+        ),
+        epilog="Lane/date: FTS pre-filter, vec post-filter.",
     )
     parser.add_argument(
         "query",
@@ -1133,6 +1225,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip thread-spine expansion (pack Hits only).",
     )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="Skip Qwen3-Reranker (keep RRF order; rerank=None). Smoke/debug.",
+    )
+    parser.add_argument(
+        "--rerank-model",
+        default=None,
+        help=(
+            "Ollama rerank tag (default: $MAILROOM_RERANK_MODEL or %s). "
+            "Pull: %s"
+            % (rl.DEFAULT_RERANK_MODEL, rl.PULL_ONE_LINER)
+        ),
+    )
     return parser
 
 
@@ -1177,6 +1283,8 @@ def main(argv: list[str] | None = None) -> int:
                 dims=args.dims,
                 extension_path=args.vec_extension,
                 expand_threads=not args.no_thread_expand,
+                rerank=not args.no_rerank,
+                rerank_model=args.rerank_model,
             )
     except (RetrieveError, el.EmbedError) as exc:
         sys.stderr.write("error: %s\n" % exc)
@@ -1197,10 +1305,19 @@ def main(argv: list[str] | None = None) -> int:
                 "\n# cosine KNN only — hybrid retrieve is the default CLI.\n"
             )
         else:
+            scored = any(h.get("rerank") is not None for h in hits)
+            if args.no_rerank:
+                rerank_note = "rerank=off (--no-rerank)"
+            elif scored:
+                rerank_note = "rerank=%s" % (
+                    args.rerank_model or rl.default_rerank_model()
+                )
+            else:
+                rerank_note = "rerank=None (fail-open)"
             sys.stderr.write(
                 "\n# hybrid retrieve: FTS pre-filter + vec post-filter; "
-                "rerank=None (PR-7). instruct_version=%s dims=%s\n"
-                % (QUERY_INSTRUCT_VERSION, QUERY_DIMS)
+                "%s. instruct_version=%s dims=%s\n"
+                % (rerank_note, QUERY_INSTRUCT_VERSION, QUERY_DIMS)
             )
     return 0
 
