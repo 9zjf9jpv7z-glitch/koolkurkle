@@ -21,7 +21,7 @@
 		<key>MAILARCHIVE</key>
 		<string>__HOME__/MailArchive</string>
 		<key>MAILROOM_KEYCHAIN_ITEM</key>
-		<string>mailroom.icloud.app-password</string>
+		<string>mailroom.imap.app-password</string>
 	</dict>
 	<key>StartCalendarInterval</key>
 	<dict>

@@ -5,7 +5,8 @@
 # Body/FTS scripts pick Homebrew curl themselves (CURL_BIN unset for that step).
 # Embed uses ~/MailArchive/.venv/bin/python — not Apple /usr/bin/python3.
 #
-# Keychain item name only: mailroom.icloud.app-password
+# Keychain item name only (default): mailroom.imap.app-password
+# Legacy read-fallback: mailroom.icloud.app-password
 # Never echo, log, or commit the password.
 #
 # zsh on Mac (also runs under bash 3.2+ with the same builtins).
@@ -24,13 +25,31 @@ export MAILARCHIVE_LOGS="$LOGS"
 
 # Load IMAP app password from Keychain by service name only.
 # Override the item with MAILROOM_KEYCHAIN_ITEM. Do not print the value.
-KEYCHAIN_ITEM="${MAILROOM_KEYCHAIN_ITEM:-mailroom.icloud.app-password}"
-if [ -z "${IMAP_APP_PASSWORD:-}" ] && [ -x /usr/bin/security ]; then
+# MAILROOM_SECURITY_BIN is a test hook (default: /usr/bin/security).
+KEYCHAIN_DEFAULT="mailroom.imap.app-password"
+KEYCHAIN_LEGACY="mailroom.icloud.app-password"
+KEYCHAIN_ITEM="${MAILROOM_KEYCHAIN_ITEM:-$KEYCHAIN_DEFAULT}"
+SECURITY_BIN="${MAILROOM_SECURITY_BIN:-/usr/bin/security}"
+if [ -z "${IMAP_APP_PASSWORD:-}" ] && [ -x "$SECURITY_BIN" ]; then
   set +e
-  _pw="$(/usr/bin/security find-generic-password -s "$KEYCHAIN_ITEM" -w 2>/dev/null)"
+  _pw="$("$SECURITY_BIN" find-generic-password -s "$KEYCHAIN_ITEM" -w 2>/dev/null)"
   _rc=$?
   set -e
-  if [ "$_rc" -eq 0 ] && [ -n "${_pw:-}" ]; then
+  if [ "$_rc" -ne 0 ] || [ -z "${_pw:-}" ]; then
+    unset _pw
+    # One-time fallback only when the requested name is the new default.
+    if [ "$KEYCHAIN_ITEM" = "$KEYCHAIN_DEFAULT" ]; then
+      set +e
+      _pw="$("$SECURITY_BIN" find-generic-password -s "$KEYCHAIN_LEGACY" -w 2>/dev/null)"
+      _rc=$?
+      set -e
+      if [ "$_rc" -eq 0 ] && [ -n "${_pw:-}" ]; then
+        echo "warning: Keychain service $KEYCHAIN_DEFAULT missing or empty; falling back to $KEYCHAIN_LEGACY (one-time). Live Keychain cutover is not done yet." >&2
+        IMAP_APP_PASSWORD="$_pw"
+        export IMAP_APP_PASSWORD
+      fi
+    fi
+  else
     IMAP_APP_PASSWORD="$_pw"
     export IMAP_APP_PASSWORD
   fi
