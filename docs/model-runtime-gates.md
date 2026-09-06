@@ -6,32 +6,38 @@ port cannot be mistaken for a working scorer.
 
 Human Terminal cards (one machine, one command per fence):
 [ops-terminal.md](ops-terminal.md). ask_mail probe + neg smoke:
-[ask_mail.md](ask_mail.md). Rerank lock (fail-open today):
-[rerank.md](rerank.md).
+[ask_mail.md](ask_mail.md). Rerank (CrossEncoder default, fail-open
+forever): [rerank.md](rerank.md).
 
 ## Traps
 
-1. **Interface proof** — `curl` or a ≤5-line probe against the
-   **official** path. Generate: LM Studio
+1. **Interface proof** — official path only. Generate: LM Studio
    `POST /v1/chat/completions` with the **locked**
-   `$MAILROOM_GENERATE_MODEL`. Expected PASS shape is in
-   [ask_mail.md](ask_mail.md) and `ask_mail.py --probe`.
+   `$MAILROOM_GENERATE_MODEL`. Rerank: CrossEncoder `predict` floats
+   (or last-token yes/no logits). Expected generate PASS shape is in
+   [ask_mail.md](ask_mail.md) and `ask_mail.py --probe`. Expected
+   rerank proof: `scripts/rerank_smoke.py` (relevant pair outscores
+   unrelated; CI may use a stub and label **fail-open-only**).
 2. **Negative smoke** — garbage / stopped / wrong model / port closed /
    unreachable must **fail** or labeled-fail-open. A probe that
-   “succeeds” on any model is a failed gate.
+   “succeeds” on any model is a failed gate. Rerank comma-garbage
+   (`0.12, 0.45, 0.03`) or a scalar sold as N scores must exit
+   non-zero (`rerank_smoke.py` / `tests/test_rerank_shape_smoke.py`).
 3. **Official path named** — LM Studio `/v1/chat/completions` for
-   generate; last-token yes/no logits (or lock-C CrossEncoder on MPS)
-   for rerank. **Community GGUF is insufficient** without trap 1 PASS.
-   Ollama `/api/generate` and `/api/chat` are the **wrong** rerank
-   interface (lock B not shipped).
+   generate; CrossEncoder on `Qwen/Qwen3-Reranker-0.6B` (MPS when
+   available) for rerank. **Community GGUF is insufficient** without
+   trap 1 PASS. Ollama `/api/generate` and `/api/chat` are the **wrong**
+   rerank interface — Ollama cannot score Qwen3-Reranker.
 4. **fail-open-only must be labeled** — every ask_mail response
-   includes `generate_mode` and `rerank_mode`. Until CrossEncoder C,
-   `rerank_mode` is `fail_open` or `none` only (RRF citations; scores
-   not claimed). `hits_only` is explicit. Never silent.
+   includes `generate_mode` and `rerank_mode`.
+   `rerank_mode` is `crossencoder` when live floats land, `fail_open`
+   when the extra/predict soft-fails, `none` for `--no-rerank`, `off`
+   for `MAILROOM_RERANK_BACKEND=off`. `hits_only` is explicit. Never
+   silent. When CI cannot load weights, label **fail-open-only**.
 5. **CoS withholds merge AR** without trap 1 PASS **or** an explicit
    **fail-open-only** label on the PR.
 
-## This PR (lock A)
+## This PR (lock C — CrossEncoder)
 
 | Surface | Runtime | Ready? |
 |---|---|---|
@@ -39,8 +45,16 @@ Human Terminal cards (one machine, one command per fence):
 | Generate down | labeled `generate_mode=fail_open` → hits-only | fail-open-only |
 | Mini generate fallback | **LM Studio** (same path). Not unnamed Ollama 9B/27B | hits-only if LM Studio is not running |
 | Mini embed | Ollama `qwen3-embedding:8b` (official library tag) | embed only — not a scorer |
-| Rerank | fail-open RRF (`rerank_mode=fail_open` or `none`) | **fail-open-only** |
-| Rerank later | CrossEncoder on MPS (lock C, follow-up) | not this PR |
+| Rerank | CrossEncoder `Qwen/Qwen3-Reranker-0.6B` (`rerank_mode=crossencoder`) | Live floats after optional extra + weights |
+| Rerank missing extra / predict fail | fail-open RRF (`rerank=None`, `rerank_mode=fail_open`) | **fail-open-only** |
+| Rerank off | `--no-rerank` → `none`; `MAILROOM_RERANK_BACKEND=off` → `off` | intentional |
+
+## Memory
+
+Retrieve+rerank with the **embed** runtime resident. Unload the
+CrossEncoder (`rerank_lib.unload_cross_encoder`) and/or short Ollama
+`keep_alive` **before** LM Studio 35B-class generate. Do not co-pin
+embed + 35B + rerank.
 
 ## Interface proof (generate)
 
@@ -76,6 +90,27 @@ Raw LM Studio `200` body must be `object=chat.completion` with a
 non-empty `choices[0].message.content` and a `model` that matches the
 locked id. Anything else is FAIL.
 
+## Interface proof (rerank)
+
+```zsh
+# MBP — CrossEncoder shape + stub/live predict (no mail bodies)
+$HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/rerank_smoke.py
+```
+
+```zsh
+# Mini — same CRM smoke
+$HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/rerank_smoke.py
+```
+
+Needed signal: a finite float per pair from `CrossEncoder.predict`
+(or a yes/no logit pair). A relevant subject+snippet must outscore an
+unrelated one. CI without weights uses a stub and labels
+**fail-open-only**; the real `score_documents_crossencoder` path is
+still wired. Live weights: `MAILROOM_RERANK_SMOKE_LIVE=1` after
+`pip install -r requirements-rerank.txt`.
+
+Fixture: `tests/fixtures/rerank_interface_proof.json`.
+
 ## Negative smoke (generate)
 
 | Case | Expected `generate_mode` | Expected `generate_error` / stderr |
@@ -89,6 +124,17 @@ locked id. Anything else is FAIL.
 Unit tests cover the labeled fallbacks with mocks. Live MBP matrix is
 the operator gate.
 
+## Negative smoke (rerank)
+
+| Case | Expected |
+|---|---|
+| Ollama comma-garbage `"0.12, 0.45, 0.03"` | `RerankError` / smoke exit 2 — not working scores |
+| Scalar sold as N scores | `RerankError` / smoke exit 2 |
+| Missing sentence-transformers / torch | fail-open; `rerank_mode=fail_open`; stderr warning |
+| `predict` exception | same fail-open |
+| `--no-rerank` | `rerank_mode=none`; `rerank=None` |
+| `MAILROOM_RERANK_BACKEND=off` | `rerank_mode=off`; `rerank=None` |
+
 ## Definition of Done
 
 - [ ] Interface proof PASS on MBP with locked `$MAILROOM_GENERATE_MODEL`
@@ -96,7 +142,9 @@ the operator gate.
 - [ ] Negative smoke PASS (or documented live run) for stopped / wrong
       model / port closed / unreachable.
 - [ ] Every `/ask` JSON has `generate_mode` and `rerank_mode`.
-- [ ] Rerank is labeled **fail-open-only** (no Ready claim that Ollama
-      generate/chat scores work).
-- [ ] If interface proof is not PASS: the PR is labeled
+- [ ] Rerank default is CrossEncoder. Ollama generate/chat is **not**
+      claimed as a working scorer.
+- [ ] `scripts/rerank_smoke.py` PASS. If live weights are not in CI:
+      explicit **fail-open-only** label on the smoke JSON and PR.
+- [ ] If generate interface proof is not PASS: the PR is labeled
       **fail-open-only** before merge. CoS withholds merge AR otherwise.

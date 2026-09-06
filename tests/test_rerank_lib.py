@@ -44,6 +44,10 @@ class ParseScoreTests(unittest.TestCase):
         with self.assertRaises(rl.RerankError):
             rl.parse_rerank_score("   ")
 
+    def test_comma_garbage_raises(self):
+        with self.assertRaises(rl.RerankError):
+            rl.parse_rerank_score("0.12, 0.45, 0.03")
+
 
 class DocumentAndPromptTests(unittest.TestCase):
     def test_hit_document_uses_subject_snippet_not_body(self):
@@ -112,6 +116,27 @@ class OllamaClientTests(unittest.TestCase):
         ):
             self.assertEqual(rl.default_rerank_model(), "custom-rerank:tag")
             self.assertEqual(rl.default_rerank_timeout(), 9)
+
+    def test_default_backend_is_crossencoder(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(rl.default_rerank_backend(), "crossencoder")
+            self.assertEqual(rl.default_rerank_model(), rl.DEFAULT_CE_MODEL)
+        with mock.patch.dict(
+            "os.environ", {"MAILROOM_RERANK_BACKEND": "off"}, clear=False
+        ):
+            self.assertEqual(rl.default_rerank_backend(), "off")
+        with mock.patch.dict(
+            "os.environ", {"MAILROOM_RERANK_BACKEND": "ollama"}, clear=False
+        ):
+            self.assertEqual(rl.default_rerank_backend(), "ollama")
+            self.assertEqual(
+                rl.default_rerank_model("ollama"), rl.DEFAULT_OLLAMA_RERANK_MODEL
+            )
+
+    def test_score_one_ollama_is_opt_in_only(self):
+        self.assertEqual(rl.DEFAULT_RERANK_BACKEND, "crossencoder")
+        self.assertEqual(rl.DEFAULT_RERANK_MODEL, "Qwen/Qwen3-Reranker-0.6B")
+        self.assertIn("email search query", rl.RERANK_INSTRUCT)
 
 
 class HygieneTests(unittest.TestCase):

@@ -1,7 +1,8 @@
 # ask_mail (PR-8)
 
 CLI + loopback HTTP + MCP over `semantic_search.retrieve()`. Citations
-follow RRF order until CrossEncoder C (scores not claimed). Mail bodies are
+follow live `Hit.rerank` descending when CrossEncoder scores are
+present; otherwise RRF (fail-open; scores not claimed). Mail bodies are
 **DATA**. Drafts only — never send. `ask_audit` stores query + ids +
 model + host, never bodies.
 
@@ -15,7 +16,7 @@ No machine home hardcodes.
 | Generate (MBP) | **LM Studio** `POST /v1/chat/completions` | `$MAILROOM_LM_STUDIO_URL` (default `http://127.0.0.1:1234`) + locked `$MAILROOM_GENERATE_MODEL` |
 | Generate (Mini) | **LM Studio** (same path) | Not unnamed Ollama 9B/27B chat. If LM Studio is down → labeled `fail_open` / `hits_only` |
 | Embed (Mini / MBP) | Ollama `qwen3-embedding:8b` | Official library tag. Not a reranker |
-| Rerank today | fail-open RRF | `rerank_mode=fail_open` or `none`. Lock C (CrossEncoder on MPS) is follow-up |
+| Rerank | CrossEncoder `Qwen/Qwen3-Reranker-0.6B` (optional extra) | `rerank_mode=crossencoder` when live floats land; `fail_open` / `none` / `off` otherwise. Ollama cannot score Qwen3-Reranker |
 
 Ollama `/api/generate` and `/api/chat` are **not** a working scorer.
 See [rerank.md](rerank.md) and [model-runtime-gates.md](model-runtime-gates.md).
@@ -25,24 +26,25 @@ See [rerank.md](rerank.md) and [model-runtime-gates.md](model-runtime-gates.md).
 Every ask / `/ask` / MCP `ask_mail` object includes:
 
 - `generate_mode`: `lm_studio` | `hits_only` | `fail_open`
-- `rerank_mode`: `fail_open` | `none` (fail-open-only until CrossEncoder C; scores not claimed)
+- `rerank_mode`: `crossencoder` \| `fail_open` \| `none` \| `off`
 - `generate_runtime`: `lm_studio` (always named)
-- `citations`: `message_id` list in **RRF** order until CrossEncoder C (never invented)
+- `citations`: `message_id` list in **rerank** order when live floats
+  are present, else **RRF** (never invented)
 - `generate_error`: neg-smoke label or null
 
-`fail_open` / `none` / `hits_only` are explicit. Never silent.
-`rerank_mode` is **fail-open-only until lock C**. Citations are RRF.
-Unofficial `Hit.rerank` numbers do not reorder citations and are not
-a Ready claim.
+`fail_open` / `none` / `off` / `hits_only` are explicit. Never silent.
+When CrossEncoder cannot run, `rerank_mode=fail_open` and citations are
+RRF (scores not claimed). Ollama generate/chat is not a working scorer.
 
 ## Sequential smoke (retrieve, then generate)
 
-Do **not** pin Ollama embed `qwen3-embedding:8b` and LM Studio chat
-(35B-class / `$MAILROOM_GENERATE_MODEL`) in VRAM at the same time.
-Smoke is two phases with an unload in between.
+Do **not** pin Ollama embed `qwen3-embedding:8b`, CrossEncoder, and
+LM Studio chat (35B-class / `$MAILROOM_GENERATE_MODEL`) in VRAM at the
+same time. Retrieve+rerank may keep embed resident. Unload the
+CrossEncoder and embed **before** 35B generate.
 
 ```zsh
-# MBP — phase 1: retrieve only (embed 8b; rerank_mode=fail_open)
+# MBP — phase 1: retrieve + rerank (embed resident; CrossEncoder in-process)
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
 ```
@@ -140,7 +142,8 @@ Mocks in `tests/test_ask_mail.py`. Live MBP matrix is the operator gate.
 - [ ] Interface proof PASS (curl or `--probe`) on MBP with locked model id.
 - [ ] Negative smoke PASS (stopped / wrong model / port closed / unreachable).
 - [ ] Schema labels present (`generate_mode`, `rerank_mode`).
-- [ ] Rerank Ready language is **fail-open-only** (no Ollama-as-working-scorer).
+- [ ] Rerank default is CrossEncoder. Fail-open is labeled when scores
+      cannot run. No Ollama-as-working-scorer.
 - [ ] Else: explicit **fail-open-only** label before merge. CoS withholds
       merge AR without probe PASS or that label.
 

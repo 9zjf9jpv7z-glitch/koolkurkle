@@ -12,8 +12,10 @@ when ``$MAILROOM_GENERATE_MODEL`` is set (optional
 to labeled hits-only if the endpoint is down. Mini generate is the same
 LM Studio path — not unnamed Ollama 9B/27B chat.
 
-Rerank today is fail-open RRF (lock A). No Ollama generate/logprobs
-scorer hotfix (lock B). CrossEncoder-on-MPS is a follow-up (lock C).
+Rerank default is in-process CrossEncoder (PR-7b / lock C). Missing
+torch/weights or predict failure → fail-open RRF (``rerank=None``,
+``rerank_mode=fail_open``). Ollama generate/chat cannot score
+Qwen3-Reranker.
 
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --json 'SDGE bill'
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --serve
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -196,32 +199,71 @@ def _empty_vec(**_kwargs: Any) -> list[dict[str, Any]]:
     return []
 
 
-RERANK_MODES = ("fail_open", "none")
+RERANK_MODES = ("crossencoder", "fail_open", "none", "off")
 
 
-def rerank_mode_for(hits: Iterable[dict[str, Any]], *, enabled: bool) -> str:
-    """Label rerank until lock C (CrossEncoder). Scores are not claimed.
+def _is_live_rerank(value: Any) -> bool:
+    try:
+        import rerank_lib as rl
 
-    Public values are ``fail_open`` (default) or ``none`` (``--no-rerank``).
-    Unofficial ``Hit.rerank`` numbers do not change the label.
+        return rl.is_live_score(value)
+    except Exception:
+        if value is None or isinstance(value, (bool, str)):
+            return False
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+
+def rerank_mode_for(
+    hits: Iterable[dict[str, Any]],
+    *,
+    enabled: bool,
+    status: dict[str, Any] | None = None,
+) -> str:
+    """Label rerank. Preserve ``none`` for ``--no-rerank``.
+
+    ``crossencoder`` when live ``Hit.rerank`` floats are present (or
+    retrieve reported that mode). ``fail_open`` when enabled but scores
+    are missing. ``off`` when ``MAILROOM_RERANK_BACKEND=off``.
     """
     if not enabled:
         return "none"
+    if status:
+        labeled = str(status.get("rerank_mode") or "").strip()
+        if labeled in RERANK_MODES:
+            return labeled
+    rows = list(hits)
+    if any(_is_live_rerank(h.get("rerank")) for h in rows):
+        return "crossencoder"
     return "fail_open"
 
 
 def citations_from_hits(hits: list[dict[str, Any]]) -> list[str]:
-    """RRF citations until CrossEncoder C. Never invent message_ids.
+    """Citations follow live ``Hit.rerank`` descending, else RRF.
 
-    Unofficial ``Hit.rerank`` values do not reorder citations.
+    Never invent message_ids. Fail-open (all ``rerank`` null) stays RRF.
     """
-    ranked = sorted(
-        hits,
-        key=lambda h: (
-            -float(h.get("rrf") or 0.0),
-            str(h.get("message_id") or h.get("id") or ""),
-        ),
-    )
+    rows = list(hits)
+    live = any(_is_live_rerank(h.get("rerank")) for h in rows)
+    if live:
+        ranked = sorted(
+            rows,
+            key=lambda h: (
+                -float(h.get("rerank") if _is_live_rerank(h.get("rerank")) else 0.0),
+                -float(h.get("rrf") or 0.0),
+                str(h.get("message_id") or h.get("id") or ""),
+            ),
+        )
+    else:
+        ranked = sorted(
+            rows,
+            key=lambda h: (
+                -float(h.get("rrf") or 0.0),
+                str(h.get("message_id") or h.get("id") or ""),
+            ),
+        )
     out: list[str] = []
     seen: set[str] = set()
     for hit in ranked:
@@ -607,11 +649,40 @@ def _base_response(
         "generate_model": model,
         "generate_host": host or default_host(),
         "generate_error": generate_error,
-        "rerank_note": (
-            "fail-open-only until CrossEncoder C. Citations are RRF. "
-            "Scores are not claimed. Ollama generate/chat is not a working scorer."
-        ),
+        "rerank_note": rerank_note_for(rerank_mode),
     }
+
+
+def configured_rerank_mode() -> str:
+    """Health-banner default. Live /ask labels come from retrieve."""
+    try:
+        import rerank_lib as rl
+
+        backend = rl.default_rerank_backend()
+        if backend == rl.BACKEND_OFF:
+            return "off"
+        if backend == rl.BACKEND_CROSSENCODER and not rl.crossencoder_import_ok():
+            return "fail_open"
+        return backend
+    except Exception:
+        return "fail_open"
+
+
+def rerank_note_for(rerank_mode: str) -> str:
+    if rerank_mode == "crossencoder":
+        return (
+            "CrossEncoder live floats on Hit.rerank. Citations sort descending. "
+            "Ollama generate/chat is not a working scorer."
+        )
+    if rerank_mode in ("none", "off"):
+        return (
+            "rerank off. Citations are RRF. "
+            "Ollama generate/chat is not a working scorer."
+        )
+    return (
+        "fail-open: RRF order, rerank=None. Scores are not claimed. "
+        "Ollama generate/chat is not a working scorer."
+    )
 
 
 def retrieve_hits(
@@ -626,6 +697,7 @@ def retrieve_hits(
     fts_only: bool,
     retrieve_fn: RetrieveFn | None,
     retrieve_kwargs: dict[str, Any] | None,
+    rerank_status: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     worker = retrieve_fn or ss.retrieve
     kwargs: dict[str, Any] = {
@@ -637,12 +709,18 @@ def retrieve_hits(
         "rerank": rerank,
         "expand_threads": True,
     }
+    if rerank_status is not None:
+        kwargs["rerank_status"] = rerank_status
     if fts_only:
         kwargs["vec_hits_fn"] = _empty_vec
         kwargs["embed_fn"] = lambda _texts, _model: []
     if retrieve_kwargs:
         kwargs.update(retrieve_kwargs)
-    return list(worker(query, **kwargs))
+    try:
+        return list(worker(query, **kwargs))
+    except TypeError:
+        kwargs.pop("rerank_status", None)
+        return list(worker(query, **kwargs))
 
 
 def ask(
@@ -668,6 +746,7 @@ def ask(
     if not q:
         raise AskMailError("Query text is empty.")
     path = Path(db).expanduser() if db is not None else default_db_path()
+    rerank_status: dict[str, Any] = {}
     hits = retrieve_hits(
         q,
         db=path,
@@ -679,9 +758,10 @@ def ask(
         fts_only=fts_only,
         retrieve_fn=retrieve_fn,
         retrieve_kwargs=retrieve_kwargs,
+        rerank_status=rerank_status,
     )
     citations = citations_from_hits(hits)
-    mode_rerank = rerank_mode_for(hits, enabled=rerank)
+    mode_rerank = rerank_mode_for(hits, enabled=rerank, status=rerank_status)
     tag = model if model is not None else default_generate_model()
     base = lm_studio_url or default_lm_studio_url()
     host = urlparse(base).netloc or default_host()
@@ -1017,7 +1097,7 @@ class AskHandler(BaseHTTPRequestHandler):
                     "generate_mode": (
                         "lm_studio" if default_generate_model() else "hits_only"
                     ),
-                    "rerank_mode": "fail_open",
+                    "rerank_mode": configured_rerank_mode(),
                     "http_host": cfg.get("host") or DEFAULT_HTTP_HOST,
                     "http_port": cfg.get("port"),
                 },
@@ -1187,7 +1267,8 @@ def serve_http(config: dict[str, Any]) -> int:
     bound = httpd.server_address[1]
     sys.stderr.write(
         "ask_mail listening http://%s:%s/ask  generate_runtime=%s  "
-        "rerank_mode=fail_open\n" % (host, bound, GENERATE_RUNTIME)
+        "rerank_mode labeled (crossencoder|fail_open|none|off)\n"
+        % (host, bound, GENERATE_RUNTIME)
     )
     try:
         httpd.serve_forever()
@@ -1368,7 +1449,8 @@ def _write_mcp_stdio(stdout: Any, message: dict[str, Any]) -> None:
 
 def serve_mcp(config: dict[str, Any]) -> int:
     sys.stderr.write(
-        "ask_mail MCP stdio  tools=%s  generate_runtime=%s  rerank_mode=fail_open\n"
+        "ask_mail MCP stdio  tools=%s  generate_runtime=%s  "
+        "rerank_mode labeled (crossencoder|fail_open|none|off)\n"
         % (",".join(MCP_TOOLS), GENERATE_RUNTIME)
     )
     stdin = sys.stdin
@@ -1396,7 +1478,7 @@ def build_parser() -> argparse.ArgumentParser:
             "ask_mail PR-8: hybrid retrieve via semantic_search.retrieve(), "
             "optional LM Studio /v1/chat/completions, loopback HTTP, MCP. "
             "Drafts only. generate_mode and rerank_mode are always labeled. "
-            "Rerank is fail-open RRF today (no Ollama scorer hotfix)."
+            "Rerank default is CrossEncoder; fail-open if the optional extra is missing."
         )
     )
     parser.add_argument("query", nargs="*", help="Search / ask string.")
@@ -1434,7 +1516,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("retrieve", "generate"),
         default=None,
         help=(
-            "Sequential smoke: retrieve (hits-only) then generate. "
+            "Sequential smoke: retrieve+rerank (embed resident) then "
+            "unload CrossEncoder / embed before LM Studio generate. "
             "Do not pin Ollama embed 8b and LM Studio chat (35B-class) together. "
             "Unload embed between phases. See docs/ask_mail.md."
         ),

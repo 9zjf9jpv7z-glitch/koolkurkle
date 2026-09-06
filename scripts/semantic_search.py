@@ -13,7 +13,7 @@ Pipeline: infer lane + optional date window → FTS5 BM25 top-50 (subject-boost)
 live ``message_embeddings`` (vec0) LEFT JOIN ``chunk_vec_map`` → RRF
 ``1/(60+rank)`` (missing=1000) → recency ``exp(-0.002*age_days)`` unless a
 date window was set → identifier-shaped queries also MATCH ``messages_ids``
-→ optional local rerank over the fused top-20 (fail-open RRF today) → thread spine
+→ optional CrossEncoder rerank over the fused top-20 (fail-open forever) → thread spine
 expand → dedup by thread_id for the generator pack.
 
 Lane + date filters (documented):
@@ -42,10 +42,13 @@ CLI (Mac smoke; Mini venv — Apple /usr/bin/python3 cannot load sqlite-vec)::
     ~/MailArchive/.venv/bin/python scripts/semantic_search.py 'horse'
 
 ``--cosine`` is the backward-compatible embed_lib.semantic_search path.
-``--no-rerank`` keeps RRF order (``rerank_mode=none``). Default today is
-fail-open RRF (lock A). Ollama generate/chat is not a working scorer
-(lock B not shipped). See docs/rerank.md. Default invocation is hybrid
-``retrieve()``.
+``--no-rerank`` keeps RRF order (``rerank_mode=none``). Default backend
+is CrossEncoder (``rerank_mode=crossencoder`` when live floats land).
+Missing torch/weights or predict failure → fail-open
+(``rerank=None``, RRF, ``rerank_mode=fail_open``).
+``MAILROOM_RERANK_BACKEND=off`` → ``rerank_mode=off``.
+Ollama generate/chat cannot score Qwen3-Reranker. See docs/rerank.md.
+Default invocation is hybrid ``retrieve()``.
 
 Query-side v1 prefix only — does not re-embed the 63k document rows.
 """
@@ -731,6 +734,11 @@ def _clear_rerank(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return hits
 
 
+def _set_rerank_mode(status: dict[str, Any] | None, mode: str) -> None:
+    if status is not None:
+        status["rerank_mode"] = mode
+
+
 def rerank_hits(
     hits: list[dict[str, Any]],
     query: str,
@@ -742,16 +750,24 @@ def rerank_hits(
     top: int = RERANK_TOP,
     timeout: int | None = None,
     log: Callable[[str], None] | None = None,
+    backend: str | None = None,
+    status: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Score the fused top-N Hits with Qwen3-Reranker-0.6B.
+    """Score the fused top-N Hits with CrossEncoder (default).
 
     On success, writes ``rerank`` and sorts those Hits by score (then RRF).
-    Fail-open: model missing / timeout / error → ``rerank=None``, keep RRF
-    order, log a warning (no secrets, no bodies).
+    Fail-open: deps missing / predict error → ``rerank=None``, keep RRF
+    order, log a warning (no secrets, no bodies), ``rerank_mode=fail_open``.
     """
     if not hits:
+        _set_rerank_mode(status, "none" if not enabled else rl.resolve_backend(backend))
         return hits
+    resolved = rl.resolve_backend(backend)
     if not enabled:
+        _set_rerank_mode(status, "none")
+        return _clear_rerank(hits)
+    if resolved == rl.BACKEND_OFF:
+        _set_rerank_mode(status, "off")
         return _clear_rerank(hits)
 
     window = max(1, int(top))
@@ -764,22 +780,21 @@ def rerank_hits(
             scores = rl.score_documents(
                 query,
                 docs,
+                backend=resolved,
                 model=model,
                 ollama_url=ollama_url or el.DEFAULT_OLLAMA_URL,
                 timeout=timeout,
             )
         else:
             scores = list(worker(query, docs))
-        if len(scores) != len(head):
-            raise rl.RerankError(
-                "reranker returned %d scores, expected %d" % (len(scores), len(head))
-            )
+        scores = rl.coerce_score_vector(scores, len(head))
         for hit, score in zip(head, scores):
             hit["rerank"] = float(score)
     except Exception as exc:
         reason = str(exc).strip() or exc.__class__.__name__
         _rerank_warn(reason, log)
         _clear_rerank(hits)
+        _set_rerank_mode(status, rl.MODE_FAIL_OPEN)
         return hits
 
     for hit in tail:
@@ -791,6 +806,7 @@ def rerank_hits(
             str(h.get("message_id") or ""),
         )
     )
+    _set_rerank_mode(status, resolved)
     return head + tail
 
 
@@ -924,6 +940,8 @@ def retrieve(
     rerank_fn: RerankFn | None = None,
     rerank_model: str | None = None,
     rerank_top: int = RERANK_TOP,
+    rerank_backend: str | None = None,
+    rerank_status: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid FTS + vec + RRF retrieve, then optional local rerank."""
     q = (query or "").strip()
@@ -1087,6 +1105,8 @@ def retrieve(
             model=rerank_model,
             ollama_url=ollama_url,
             top=rerank_top,
+            backend=rerank_backend,
+            status=rerank_status,
         )
         pack = _dedup_generator_pack(ranked, k)
         ranked_by_id = {str(h["message_id"]): h for h in ranked}
@@ -1152,10 +1172,11 @@ def format_hits(hits: Iterable[dict]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF). "
-            "Default is retrieve(); --cosine keeps the old KNN path. "
-            "Query embed instruct_version=v1 dims=1024. "
-            "Rerank is fail-open RRF today (not a Ready scorer)."
+            "MAILROOM §6.2 hybrid retrieve (FTS + sqlite-vec + RRF + "
+            "CrossEncoder Qwen3-Reranker-0.6B). Default is retrieve(); "
+            "--cosine keeps the old KNN path. Query embed "
+            "instruct_version=v1 dims=1024. Rerank fail-open if the "
+            "optional CrossEncoder extra is missing."
         ),
         epilog="Lane/date: FTS pre-filter, vec post-filter.",
     )
@@ -1229,14 +1250,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-rerank",
         action="store_true",
-        help="Skip Qwen3-Reranker (keep RRF order; rerank=None). Smoke/debug.",
+        help="Skip CrossEncoder (keep RRF order; rerank=None; rerank_mode=none).",
+    )
+    parser.add_argument(
+        "--rerank-backend",
+        default=None,
+        help=(
+            "Rerank backend: crossencoder (default), ollama (opt-in, not a "
+            "Qwen3 scorer), or off. Override $MAILROOM_RERANK_BACKEND."
+        ),
     )
     parser.add_argument(
         "--rerank-model",
         default=None,
         help=(
-            "Optional rerank tag (default: $MAILROOM_RERANK_MODEL or %s). "
-            "Fail-open RRF today — not a Ready scorer. See docs/rerank.md."
+            "CrossEncoder id (default: $MAILROOM_RERANK_MODEL or %s). "
+            "Ollama generate/chat cannot score Qwen3-Reranker. See docs/rerank.md."
             % rl.DEFAULT_RERANK_MODEL
         ),
     )
@@ -1260,6 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     db = Path(args.db).expanduser() if args.db else default_db_path()
     k = args.k if args.k is not None else (COSINE_K if cosine else DEFAULT_K)
+    rerank_status: dict[str, Any] = {}
     try:
         if cosine:
             hits = semantic_search(
@@ -1286,6 +1316,8 @@ def main(argv: list[str] | None = None) -> int:
                 expand_threads=not args.no_thread_expand,
                 rerank=not args.no_rerank,
                 rerank_model=args.rerank_model,
+                rerank_backend=args.rerank_backend,
+                rerank_status=rerank_status,
             )
     except (RetrieveError, el.EmbedError) as exc:
         sys.stderr.write("error: %s\n" % exc)
@@ -1296,9 +1328,24 @@ def main(argv: list[str] | None = None) -> int:
             "identifier backfill: python scripts/messages_ids.py --backfill)\n"
         )
         return 0
+    if cosine:
+        rerank_mode = "off"
+    elif args.no_rerank:
+        rerank_mode = "none"
+    else:
+        rerank_mode = str(rerank_status.get("rerank_mode") or "")
+        if not rerank_mode:
+            scored = any(rl.is_live_score(h.get("rerank")) for h in hits)
+            rerank_mode = "crossencoder" if scored else "fail_open"
+    meta = {
+        "rerank_mode": rerank_mode,
+        "generate_mode": "off",
+    }
     if args.json:
         for hit in hits:
             sys.stdout.write(json.dumps(hit, ensure_ascii=False) + "\n")
+        if not cosine:
+            sys.stderr.write(json.dumps(meta, ensure_ascii=False) + "\n")
     else:
         sys.stdout.write(format_hits(hits) + "\n")
         if cosine:
@@ -1306,17 +1353,15 @@ def main(argv: list[str] | None = None) -> int:
                 "\n# cosine KNN only — hybrid retrieve is the default CLI.\n"
             )
         else:
-            if args.no_rerank:
-                rerank_note = "rerank=off (--no-rerank); rerank_mode=none"
-            else:
-                rerank_note = (
-                    "rerank=None (fail-open-only until CrossEncoder C; "
-                    "scores not claimed)"
-                )
             sys.stderr.write(
                 "\n# hybrid retrieve: FTS pre-filter + vec post-filter; "
-                "%s. instruct_version=%s dims=%s\n"
-                % (rerank_note, QUERY_INSTRUCT_VERSION, QUERY_DIMS)
+                "rerank_mode=%s generate_mode=%s. instruct_version=%s dims=%s\n"
+                % (
+                    rerank_mode,
+                    meta["generate_mode"],
+                    QUERY_INSTRUCT_VERSION,
+                    QUERY_DIMS,
+                )
             )
     return 0
 
