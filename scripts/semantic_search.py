@@ -883,7 +883,29 @@ def retrieve(
         ids_hits: list[dict[str, Any]] = []
         if ident:
             ids_hits = mids.match_messages_ids(used, q, k=IDS_K)
-        vec_hits = _run_vec(inferred)
+        def _passes_vec_filters(item: dict[str, Any], active_lane: str | None) -> bool:
+            """Vec post-filter (KNN / mock hits): lane + date_utc window."""
+            if not active_lane and not after and not before:
+                return True
+            meta = _load_message(used, str(item.get("message_id") or ""))
+            if active_lane:
+                msg_lane = str(meta.get("lane") or "").lower()
+                if msg_lane != active_lane.lower():
+                    return False
+            lo, hi = _date_bounds(after, before)
+            date_s = str(meta.get("date") or "")
+            if lo and date_s < lo:
+                return False
+            if hi and date_s > hi:
+                return False
+            return True
+
+        vec_hits = [
+            item for item in _run_vec(inferred) if _passes_vec_filters(item, inferred)
+        ]
+        # Re-number vec_rank after the post-filter so ranks stay 1..n.
+        for i, item in enumerate(vec_hits, start=1):
+            item["vec_rank"] = i
         # Inferred lane only: if nothing matched, fail-open without the lane
         # filter so Mac smoke (SDGE / Caddell) still ranks when live `lane`
         # values are not exactly money/people. Explicit --lane stays strict.
@@ -893,7 +915,11 @@ def retrieve(
             fts_hits = fts_search(
                 used, q, k=FTS_K, lane=None, after=after, before=before
             )
-            vec_hits = _run_vec(None)
+            vec_hits = [
+                item for item in _run_vec(None) if _passes_vec_filters(item, None)
+            ]
+            for i, item in enumerate(vec_hits, start=1):
+                item["vec_rank"] = i
 
         merged: dict[str, dict[str, Any]] = {}
 
