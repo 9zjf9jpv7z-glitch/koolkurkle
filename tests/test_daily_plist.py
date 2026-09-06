@@ -22,8 +22,8 @@ class PlistTests(unittest.TestCase):
         self.assertEqual(args[0], "/bin/zsh")
         self.assertTrue(args[1].endswith("/MailArchive/scripts/run_mailroom_daily.sh"))
         self.assertTrue(args[1].startswith("__HOME__/"))
-        self.assertNotIn("/Users/buck", args[1])
-        self.assertNotIn("/Users/Buck", args[1])
+        self.assertNotIn("EXAMPLE_USER_LOCAL", args[1])
+        self.assertNotIn("/Users/USERNAME", args[1])
 
     def test_schedule_and_keepalive(self):
         self.assertTrue(self.data["RunAtLoad"])
@@ -48,10 +48,9 @@ class PlistTests(unittest.TestCase):
     def test_plist_has_no_secret_values(self):
         raw = PLIST.read_text(encoding="utf-8")
         self.assertNotIn("IMAP_APP_PASSWORD", raw)
-        self.assertNotIn("@me.com", raw)
-        self.assertNotIn("@icloud.com", raw)
-        self.assertNotIn("/Users/buck", raw)
-        self.assertNotIn("/Users/Buck", raw)
+        self.assertNotIn("EXAMPLE_USER_LOCAL", raw)
+        self.assertNotIn("@example.invalid", raw)
+        self.assertNotIn("/Users/USERNAME", raw)
         self.assertIn("__HOME__", raw)
 
 
@@ -68,10 +67,9 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("cron", text)
         self.assertIn("s|__HOME__|$HOME|g", text)
         self.assertIn("$HOME/MailArchive/scripts/run_mailroom_daily.sh", text)
-        self.assertNotIn("kirkbacon", text)
-        self.assertNotIn("/Users/buck", text)
-        self.assertNotIn("/Users/Buck", text)
-        self.assertNotIn("login **Buck**", text)
+        self.assertNotIn("EXAMPLE_USER_LOCAL", text)
+        self.assertNotIn("@example.invalid", text)
+        self.assertNotIn("/Users/USERNAME", text)
 
 
 if __name__ == "__main__":

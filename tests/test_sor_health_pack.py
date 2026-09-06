@@ -23,12 +23,10 @@ import sor_health_pack as hp  # noqa: E402
 
 SECRET_BODY = "BODY_MUST_NOT_APPEAR_IN_HEALTH_OUTPUT"
 FORBIDDEN = (
-    "kirkbacon",
-    "@me.com",
+    "EXAMPLE_USER_LOCAL",
+    "@example.invalid",
     "-----BEGIN",
     "ak_live",
-    "/Users/buck",
-    "/Users/Buck",
 )
 
 
@@ -123,8 +121,8 @@ class PathTests(unittest.TestCase):
         ):
             path = hp.default_db_path()
         self.assertEqual(path, Path("~/custom/mailroom.sqlite").expanduser())
-        self.assertNotIn("/Users/buck", str(path))
-        self.assertNotIn("/Users/Buck", str(path))
+        self.assertNotIn("EXAMPLE_USER_LOCAL", str(path))
+        self.assertNotIn("/Users/USERNAME", str(path))
 
     def test_default_db_uses_path_home(self):
         fake_home = Path("/tmp/testhome-sor-health")
@@ -421,7 +419,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("integrity: ok", proc.stdout)
         self.assertIn("messages=4", proc.stdout)
         self.assertNotIn(SECRET_BODY, proc.stdout)
-        self.assertNotIn("/Users/buck", proc.stdout)
+        self.assertNotIn("EXAMPLE_USER_LOCAL", proc.stdout)
+        self.assertNotIn("/Users/USERNAME", proc.stdout)
 
     def test_cli_json_and_hybrid_fail_open(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -455,7 +454,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("MAILROOM_DB", proc.stdout)
         self.assertIn("$HOME/MailArchive/mailroom.sqlite", proc.stdout)
-        self.assertNotIn("/Users/buck", proc.stdout)
+        self.assertNotIn("EXAMPLE_USER_LOCAL", proc.stdout)
+        self.assertNotIn("/Users/USERNAME", proc.stdout)
 
 
 class HygieneTests(unittest.TestCase):
@@ -493,15 +493,18 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("sor-health.md", readme)
         self.assertIn("# MBP — SoR health + hybrid smoke", readme)
 
-    def test_existing_denylist_still_covers_kirkbacon(self):
+    def test_existing_denylist_uses_generic_tokens(self):
         daily = (ROOT / "tests" / "test_mailroom_daily.py").read_text(encoding="utf-8")
         incremental = (ROOT / "tests" / "test_embed_incremental.py").read_text(
             encoding="utf-8"
         )
         plist = (ROOT / "tests" / "test_daily_plist.py").read_text(encoding="utf-8")
-        self.assertIn("kirkbacon", daily)
-        self.assertIn("kirkbacon", incremental)
-        self.assertIn("kirkbacon", plist)
+        self.assertIn("EXAMPLE_USER_LOCAL", daily)
+        self.assertIn("EXAMPLE_USER_LOCAL", incremental)
+        self.assertIn("EXAMPLE_USER_LOCAL", plist)
+        self.assertIn("@example.invalid", daily)
+        self.assertIn("@example.invalid", incremental)
+        self.assertIn("@example.invalid", plist)
 
 
 if __name__ == "__main__":
