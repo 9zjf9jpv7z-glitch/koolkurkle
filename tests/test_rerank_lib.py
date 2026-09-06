@@ -121,10 +121,11 @@ class HygieneTests(unittest.TestCase):
             ROOT / "docs" / "rerank.md",
             ROOT / "README.md",
         ]
+        # Generics only in this file (no machine login / home spellings).
         forbidden = (
-            "/Users/buck",
-            "kirkbacon",
-            "@me.com",
+            "EXAMPLE_USER_LOCAL",
+            "example.invalid",
+            "__HOME__",
             "-----BEGIN",
             "ak_live",
         )
@@ -132,11 +133,13 @@ class HygieneTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for token in forbidden:
                 self.assertNotIn(token, text, msg="%s %s" % (path.name, token))
-        self.assertIn("$HOME", (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"))
-        self.assertIn("MAILROOM_DB", (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"))
-        self.assertIn("MBP", (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"))
-        self.assertIn("Mini", (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"))
-        self.assertIn("ollama pull", (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"))
+            self.assertNotIn("/Users/", text, msg=path.name)
+        docs = (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8")
+        self.assertIn("$HOME", docs)
+        self.assertIn("MAILROOM_DB", docs)
+        self.assertIn("MBP", docs)
+        self.assertIn("Mini", docs)
+        self.assertIn("ollama pull", docs)
 
 
 if __name__ == "__main__":
