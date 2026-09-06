@@ -70,12 +70,13 @@ macos-slim uninstall
 
 `tick` is the LaunchAgent entry. Also accepted: `install`, `uninstall`.
 
-## User install (Mini, login Buck)
+## User install (Mini — set your macOS login)
 
 Copy this tree onto the Mini (do not run from the MBP as the default
 target). Scripts must be `chmod 700`; plists `644`.
 
 ```zsh
+# Mini — set your macOS login; install substitutes $HOME in the LaunchAgent
 cd /path/to/macos-slim
 chmod 700 macos-slim.sh apply.sh restore.sh root/macos-slim-root.sh root/INSTALL-ROOT.sh
 chmod 644 com.user.macos-slim.plist.template root/com.user.macos-slim-root.plist
@@ -87,7 +88,7 @@ chmod 644 com.user.macos-slim.plist.template root/com.user.macos-slim-root.plist
 (`RunAtLoad` + `StartInterval` 300, `tick`) from the checked-in template
 when present, or writes the same plist inline. Then it bootstraps the gui
 domain. Live Mini copies of the user scripts may also live under
-`~/Library/Scripts/macos-slim/` (login Buck).
+`~/Library/Scripts/macos-slim/` (your Mini login).
 
 ## Optional root helper (mdutil only)
 
@@ -107,7 +108,7 @@ helper with `boot`.
 
 1. Argument `$1` or `MACOS_SLIM_ROOT_STAGE`
 2. **Repo path** — the script's own directory (`macos-slim/root/` in this tree)
-3. **Live Mini** — `~/Library/Scripts/macos-slim/root-stage` (login Buck)
+3. **Live Mini** — `~/Library/Scripts/macos-slim/root-stage` (your Mini login)
 
 ```zsh
 # from this repo (preferred for a fresh checkout)
@@ -133,11 +134,9 @@ sudoers **template only** (`root/macos-slim.sudoers.example`) — placeholder
 USERNAME ALL=(root) NOPASSWD: /usr/local/libexec/macos-slim-root.sh
 ```
 
-Mini login example (do not commit a live sudoers.d file):
-
-```
-Buck ALL=(root) NOPASSWD: /usr/local/libexec/macos-slim-root.sh
-```
+Your Mini login (example placeholder USERNAME) — do not commit a live
+sudoers.d file. `INSTALL-ROOT.sh` replaces `USERNAME` with the invoking
+user when `INSTALL_SUDOERS=1`.
 
 Nothing in this tree is a Keychain secret, app password, or live sqlite DB.
 

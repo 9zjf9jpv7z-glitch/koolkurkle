@@ -282,6 +282,8 @@ class SourceHygieneTests(unittest.TestCase):
             "@me.com",
             "-----BEGIN",
             "ak_live",
+            "/Users/buck",
+            "/Users/Buck",
         )
         named = {
             "run_mailroom_daily.sh",

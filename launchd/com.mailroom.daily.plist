@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: install substitutes __HOME__ with $HOME (launchd does not expand $HOME). -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
@@ -7,10 +8,10 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/zsh</string>
-		<string>/Users/buck/MailArchive/scripts/run_mailroom_daily.sh</string>
+		<string>__HOME__/MailArchive/scripts/run_mailroom_daily.sh</string>
 	</array>
 	<key>WorkingDirectory</key>
-	<string>/Users/buck/MailArchive</string>
+	<string>__HOME__/MailArchive</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
@@ -18,7 +19,7 @@
 		<key>PYTHONUNBUFFERED</key>
 		<string>1</string>
 		<key>MAILARCHIVE</key>
-		<string>/Users/buck/MailArchive</string>
+		<string>__HOME__/MailArchive</string>
 		<key>MAILROOM_KEYCHAIN_ITEM</key>
 		<string>mailroom.icloud.app-password</string>
 	</dict>
@@ -34,9 +35,9 @@
 	<key>KeepAlive</key>
 	<false/>
 	<key>StandardOutPath</key>
-	<string>/Users/buck/MailArchive/logs/daily_rag.stdout.log</string>
+	<string>__HOME__/MailArchive/logs/daily_rag.stdout.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/buck/MailArchive/logs/daily_rag.stderr.log</string>
+	<string>__HOME__/MailArchive/logs/daily_rag.stderr.log</string>
 	<key>ProcessType</key>
 	<string>Background</string>
 </dict>

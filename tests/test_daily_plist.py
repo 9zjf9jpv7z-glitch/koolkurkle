@@ -21,7 +21,9 @@ class PlistTests(unittest.TestCase):
         args = self.data["ProgramArguments"]
         self.assertEqual(args[0], "/bin/zsh")
         self.assertTrue(args[1].endswith("/MailArchive/scripts/run_mailroom_daily.sh"))
-        self.assertIn("/Users/buck/", args[1])
+        self.assertTrue(args[1].startswith("__HOME__/"))
+        self.assertNotIn("/Users/buck", args[1])
+        self.assertNotIn("/Users/Buck", args[1])
 
     def test_schedule_and_keepalive(self):
         self.assertTrue(self.data["RunAtLoad"])
@@ -36,14 +38,21 @@ class PlistTests(unittest.TestCase):
         self.assertIn("/usr/bin", env["PATH"])
         self.assertIn("/opt/homebrew/bin", env["PATH"])
         self.assertEqual(env["MAILROOM_KEYCHAIN_ITEM"], "mailroom.icloud.app-password")
+        self.assertEqual(env["MAILARCHIVE"], "__HOME__/MailArchive")
+        self.assertEqual(self.data["WorkingDirectory"], "__HOME__/MailArchive")
         self.assertTrue(self.data["StandardOutPath"].endswith("logs/daily_rag.stdout.log"))
         self.assertTrue(self.data["StandardErrorPath"].endswith("logs/daily_rag.stderr.log"))
+        self.assertTrue(self.data["StandardOutPath"].startswith("__HOME__/"))
+        self.assertTrue(self.data["StandardErrorPath"].startswith("__HOME__/"))
 
     def test_plist_has_no_secret_values(self):
         raw = PLIST.read_text(encoding="utf-8")
         self.assertNotIn("IMAP_APP_PASSWORD", raw)
         self.assertNotIn("@me.com", raw)
         self.assertNotIn("@icloud.com", raw)
+        self.assertNotIn("/Users/buck", raw)
+        self.assertNotIn("/Users/Buck", raw)
+        self.assertIn("__HOME__", raw)
 
 
 class ReadmeTests(unittest.TestCase):
@@ -57,7 +66,12 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("SMB/NFS", text)
         self.assertIn("Promote Mini to SoR", text)
         self.assertIn("cron", text)
+        self.assertIn("s|__HOME__|$HOME|g", text)
+        self.assertIn("$HOME/MailArchive/scripts/run_mailroom_daily.sh", text)
         self.assertNotIn("kirkbacon", text)
+        self.assertNotIn("/Users/buck", text)
+        self.assertNotIn("/Users/Buck", text)
+        self.assertNotIn("login **Buck**", text)
 
 
 if __name__ == "__main__":

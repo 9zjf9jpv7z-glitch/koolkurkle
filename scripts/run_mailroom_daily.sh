@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Mini daily RAG LaunchAgent entry (login Buck on mac-mini.local).
+# Mini daily RAG LaunchAgent entry (mac-mini.local; paths from $HOME / MAILARCHIVE).
 #
 # Headers IMAP uses Apple /usr/bin/curl via mailroom_daily.py.
 # Body/FTS scripts pick Homebrew curl themselves (CURL_BIN unset for that step).
