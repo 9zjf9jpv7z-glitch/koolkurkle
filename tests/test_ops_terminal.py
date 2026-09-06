@@ -14,6 +14,8 @@ RERANK = ROOT / "docs" / "rerank.md"
 SLIM = ROOT / "macos-slim" / "README.md"
 HEALTH = ROOT / "docs" / "sor-health.md"
 LOCK = ROOT / "docs" / "pr0" / "with_writer_lock_DESIGN.md"
+GATES = ROOT / "docs" / "model-runtime-gates.md"
+ASK = ROOT / "docs" / "ask_mail.md"
 
 
 class OpsTerminalDocTests(unittest.TestCase):
@@ -44,17 +46,25 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertIn("dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
         self.assertIn(":F16", text)
         self.assertNotIn("dengcao/Qwen3-Reranker-0.6B &&", text)
-        self.assertIn("ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
-        self.assertIn(
-            "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b",
-            text,
-        )
+        self.assertNotIn("ollama pull dengcao", text)
+        self.assertNotIn("ollama cp dengcao", text)
+        self.assertIn("Early-error traps", text)
+        self.assertIn("Interface proof", text)
+        self.assertIn("fail-open-only", text)
+        self.assertIn("model-runtime-gates.md", text)
+        self.assertIn("ask_mail.py --probe", text)
+        self.assertIn("qwen3-embedding:8b", text)
+        self.assertIn("$HOME/Desktop/Heavy-Bot/to-bot", text)
+        self.assertIn("/workspace", text)
+        self.assertIn("before box read", text)
+        self.assertIn("ollama stop qwen3-embedding:8b", text)
+        self.assertIn("--phase retrieve", text)
         self.assertNotIn("/Users/", text)
         self.assertNotIn("-----BEGIN", text)
         self.assertNotIn("ak_live", text)
 
     def test_linked_from_existing_docs(self):
-        for path in (README, DAILY, RERANK, SLIM, HEALTH, LOCK):
+        for path in (README, DAILY, RERANK, SLIM, HEALTH, LOCK, GATES, ASK):
             text = path.read_text(encoding="utf-8")
             self.assertIn("ops-terminal.md", text, msg=path.name)
 

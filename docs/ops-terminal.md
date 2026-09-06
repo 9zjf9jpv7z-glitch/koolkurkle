@@ -3,7 +3,10 @@
 Checklist for Action-required cards a human pastes on a Mac. Keychain
 names and Mini daily install:
 [scripts/README.mailroom-daily.md](../scripts/README.mailroom-daily.md).
-Ollama pull + Little Snitch: [rerank.md](rerank.md). Mini-only slim:
+Model/runtime gates (interface proof, neg smoke, fail-open-only):
+[model-runtime-gates.md](model-runtime-gates.md). Rerank is fail-open
+RRF today — not an Ollama working scorer: [rerank.md](rerank.md).
+ask_mail probe: [ask_mail.md](ask_mail.md). Mini-only slim:
 [macos-slim/README.md](../macos-slim/README.md).
 
 These cards are chat/operator steps. They are not the writer-lock file
@@ -90,32 +93,87 @@ bodies, and comments. Generics only:
 To change a PR description, edit the first Conversation comment
 (⋯ → Edit). The title pencil edits the title only.
 
-## Ollama + Little Snitch
+## Early-error traps (model / runtime)
 
-Preferred pull uses an explicit quant tag. The community port has no
-untagged `latest`. `:F16` is also fine. Recipes: [rerank.md](rerank.md).
+Before Ready or merge on generate or rerank, run the gates in
+[model-runtime-gates.md](model-runtime-gates.md). CoS withholds merge
+AR without interface-proof PASS **or** an explicit **fail-open-only**
+label.
+
+1. **Interface proof** — `curl` or `ask_mail.py --probe` against the
+   official path (LM Studio `/v1/chat/completions`, locked model id).
+2. **Negative smoke** — garbage / stopped / wrong model / port closed /
+   unreachable must fail or labeled-fail-open.
+3. **Official path named** — community GGUF
+   (`dengcao/Qwen3-Reranker-0.6B:Q8_0` or `:F16`; no untagged `latest`)
+   is insufficient without trap 1 PASS. Ollama generate/chat is the
+   wrong rerank interface.
+4. **fail-open-only must be labeled** — `generate_mode` + `rerank_mode`
+   on every ask_mail response.
+5. **CoS withholds merge AR** without PASS or that label.
 
 ```zsh
-# Mini — pull reranker (explicit quant; untagged has no latest)
-ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
+# MBP — LM Studio interface proof (locked model id)
+$HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --probe
 ```
 
-```zsh
-# Mini — alias for MAILROOM default tag
-ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
-```
+Do **not** paste `ollama pull` / `ollama cp` of the community reranker
+as a working-scorer card. GGUF present ≠ scores. Rerank today is
+fail-open RRF ([rerank.md](rerank.md)).
 
-```zsh
-# MBP — pull reranker (explicit quant; untagged has no latest)
-ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0
-```
+## Ollama embed + Little Snitch
 
-```zsh
-# MBP — alias for MAILROOM default tag
-ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b
-```
-
-If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
+Official **embed** pull is `qwen3-embedding:8b` (not a reranker). If
+`ollama pull` fails with `dial tcp … connect: bad file descriptor`
 while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
 Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in
-Little Snitch, then retry the pull.
+Little Snitch, then retry the embed pull.
+
+```zsh
+# Mini — official embed pull (not a reranker)
+ollama pull qwen3-embedding:8b
+```
+
+```zsh
+# MBP — official embed pull (not a reranker)
+ollama pull qwen3-embedding:8b
+```
+
+## ask_mail sequential smoke (do not pin embed + chat)
+
+Retrieve first (Ollama embed `qwen3-embedding:8b`), then **unload**,
+then generate (LM Studio / `$MAILROOM_GENERATE_MODEL`). Do not pin
+embed 8b and LM Studio 35B-class chat in VRAM together. Recipes:
+[ask_mail.md](ask_mail.md).
+
+```zsh
+# MBP — ask_mail phase 1 retrieve (embed only)
+$HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --phase retrieve --json 'SDGE bill'
+```
+
+```zsh
+# MBP — unload embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+```zsh
+# Mini — unload embed before LM Studio generate
+ollama stop qwen3-embedding:8b
+```
+
+## Heavy packets
+
+Canonical on the Mac Desktop: `$HOME/Desktop/Heavy-Bot/to-bot`.
+Before a box / cloud agent reads a packet, sync that directory into
+`/workspace`. A Desktop file that was never synced is not visible to
+the box. Do not `git add` packet contents.
+
+```zsh
+# MBP — canonical Heavy packets (Desktop)
+ls "$HOME/Desktop/Heavy-Bot/to-bot"
+```
+
+```zsh
+# MBP — sync Heavy packets into /workspace before box read
+rsync -a "$HOME/Desktop/Heavy-Bot/to-bot/" /workspace/
+```

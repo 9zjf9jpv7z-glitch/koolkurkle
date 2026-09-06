@@ -140,15 +140,19 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("MAILROOM_DB", docs)
         self.assertIn("MBP", docs)
         self.assertIn("Mini", docs)
-        self.assertIn("ollama pull", docs)
         self.assertIn("Little Snitch", docs)
         self.assertIn("registry.ollama.ai:443", docs)
         self.assertIn("ops-terminal.md", docs)
         self.assertIn(":Q8_0", docs)
         self.assertIn(":F16", docs)
         self.assertIn("no untagged", docs.lower())
+        self.assertIn("fail-open", docs.lower())
+        self.assertIn("CrossEncoder", docs)
+        self.assertIn("yes/no logits", docs)
+        self.assertNotIn("ollama pull dengcao", docs)
+        self.assertNotIn("ollama cp dengcao", docs)
 
-    def test_community_pull_uses_explicit_quant(self):
+    def test_community_tag_stays_explicit_quant_in_lib_only(self):
         self.assertEqual(rl.COMMUNITY_OLLAMA_TAG, "dengcao/Qwen3-Reranker-0.6B:Q8_0")
         self.assertEqual(
             rl.PULL_ONE_LINER,
@@ -164,13 +168,13 @@ class HygieneTests(unittest.TestCase):
         for path in human_docs:
             text = path.read_text(encoding="utf-8")
             self.assertIsNone(bare.search(text), msg=path.name)
-            self.assertIn("dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
             self.assertNotIn("dengcao/Qwen3-Reranker-0.6B &&", text)
-            self.assertIn("ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0", text)
-            self.assertIn(
-                "ollama cp dengcao/Qwen3-Reranker-0.6B:Q8_0 qwen3-reranker:0.6b",
-                text,
-            )
+            self.assertNotIn("ollama pull dengcao", text)
+            self.assertNotIn("ollama cp dengcao", text)
+        self.assertIn(
+            "dengcao/Qwen3-Reranker-0.6B:Q8_0",
+            (ROOT / "docs" / "rerank.md").read_text(encoding="utf-8"),
+        )
         lib = (SCRIPTS / "rerank_lib.py").read_text(encoding="utf-8")
         self.assertIsNone(bare.search(lib))
         self.assertIn("&&", rl.PULL_ONE_LINER)
