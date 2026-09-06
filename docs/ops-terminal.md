@@ -68,8 +68,8 @@ security find-generic-password -s mailroom.imap.app-password -w | wc -c
 
 Apple app-specific passwords are typically ~16–19 characters.
 `security -w` may add a trailing newline, so `wc -c` can read one
-higher. An ~8-character secret will not authenticate to IMAP (Login
-denied); regenerate at appleid.apple.com.
+higher. An ~8-character secret will not authenticate to IMAP
+(Login denied); regenerate at appleid.apple.com.
 
 Prefer the new name. Leave legacy `mailroom.icloud.app-password` in
 place until IMAP smoke PASSes on the new name. The daily wrapper still
@@ -94,5 +94,5 @@ To change a PR description, edit the first Conversation comment
 
 If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
 while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
-Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in Little
-Snitch, then retry the pull. Recipes: [rerank.md](rerank.md).
+Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in
+Little Snitch, then retry the pull. Recipes: [rerank.md](rerank.md).

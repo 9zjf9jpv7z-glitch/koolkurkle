@@ -25,8 +25,8 @@ Or set `MAILROOM_RERANK_MODEL=dengcao/Qwen3-Reranker-0.6B` and skip the `cp`.
 
 If `ollama pull` fails with `dial tcp … connect: bad file descriptor`
 while `curl` / `nc` to `registry.ollama.ai:443` succeed, allow
-Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in Little
-Snitch, then retry the pull. Human Terminal cards:
+Ollama.app / `ollama` outbound to `registry.ollama.ai:443` in
+Little Snitch, then retry the pull. Human Terminal cards:
 [ops-terminal.md](ops-terminal.md).
 
 SoR path is `$MAILROOM_DB` or `$HOME/MailArchive/mailroom.sqlite`
