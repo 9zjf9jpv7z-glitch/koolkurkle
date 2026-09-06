@@ -147,6 +147,7 @@ class CliAndTickContractTests(unittest.TestCase):
         install_fn = text.split("cmd_install()")[1].split("cmd_uninstall()")[0]
         self.assertNotIn("run_apply", install_fn)
         self.assertIn("ensure_mode_off_if_missing", install_fn)
+        self.assertIn("generate_launchagent", install_fn)
         self.assertIn("PATH_LINE", text)
         self.assertIn('export PATH="$HOME/bin:$PATH"', text)
 
@@ -196,12 +197,16 @@ class SudoersAndReadmeTests(unittest.TestCase):
         )
         self.assertNotIn("password", text.lower())
 
-    def test_install_root_permissions(self):
+    def test_install_root_permissions_and_stage_paths(self):
         text = INSTALL_ROOT.read_text(encoding="utf-8")
         self.assertIn("-m 700", text)
         self.assertIn("-m 644", text)
         self.assertIn("bootstrap system", text)
         self.assertIn("macos-slim.sudoers.example", text)
+        self.assertIn("macos-slim/root/", text)
+        self.assertIn("Library/Scripts/macos-slim/root-stage", text)
+        self.assertIn("MACOS_SLIM_ROOT_DRY", text)
+        self.assertIn("USERNAME", text)
 
     def test_readme_covers_required_topics(self):
         text = README.read_text(encoding="utf-8")
@@ -217,6 +222,10 @@ class SudoersAndReadmeTests(unittest.TestCase):
         self.assertIn("Spotlight", text)
         self.assertIn("Analytics", text)
         self.assertIn("com.mailroom.cull-photos", text)
+        self.assertIn("60s", text)
+        self.assertIn("Library/Scripts/macos-slim/root-stage", text)
+        self.assertIn("macos-slim/root/", text)
+        self.assertIn("Buck ALL=(root) NOPASSWD", text)
         self.assertIn("chmod 700", text)
         self.assertIn("softwareupdated", text)
         self.assertIn("Do not `arm` or `persist`", text)
@@ -224,6 +233,34 @@ class SudoersAndReadmeTests(unittest.TestCase):
             self.assertIn(label, text)
         self.assertNotIn("kirkbacon", text)
         self.assertNotIn("@icloud.com", text)
+
+    def test_install_root_dry_run_uses_repo_path(self):
+        rc = subprocess.run(
+            ["/bin/zsh", str(INSTALL_ROOT)],
+            env={**os.environ, "MACOS_SLIM_ROOT_DRY": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(rc.returncode, 0, rc.stderr + rc.stdout)
+        self.assertIn(f"stage={SLIM / 'root'}", rc.stdout)
+        self.assertIn(str(ROOT_HELPER), rc.stdout)
+
+    def test_install_root_dry_run_honors_explicit_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp) / "root-stage"
+            stage.mkdir()
+            (stage / "macos-slim-root.sh").write_text("# helper\n", encoding="utf-8")
+            (stage / "com.user.macos-slim-root.plist").write_text("<plist/>\n", encoding="utf-8")
+            rc = subprocess.run(
+                ["/bin/zsh", str(INSTALL_ROOT), str(stage)],
+                env={**os.environ, "MACOS_SLIM_ROOT_DRY": "1"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(rc.returncode, 0, rc.stderr + rc.stdout)
+            self.assertIn(f"stage={stage}", rc.stdout)
 
     def test_no_secrets_in_tree(self):
         for path in SLIM.rglob("*"):

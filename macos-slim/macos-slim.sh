@@ -209,16 +209,44 @@ ensure_mode_off_if_missing() {
   fi
 }
 
-install_plist() {
+# install generates the login LaunchAgent (template is the same shape).
+generate_launchagent() {
   mkdir -p "$(dirname "$PLIST_DEST")" "$HOME/Library/Logs"
-  if [ ! -f "$PLIST_TEMPLATE" ]; then
-    log "error: missing $PLIST_TEMPLATE"
-    return 1
-  fi
   slim_sh="${HERE}/macos-slim.sh"
-  sed -e "s|__MACOS_SLIM_SH__|${slim_sh}|g" \
-      -e "s|__HOME__|${HOME}|g" \
-      "$PLIST_TEMPLATE" > "$PLIST_DEST"
+  if [ -f "$PLIST_TEMPLATE" ]; then
+    sed -e "s|__MACOS_SLIM_SH__|${slim_sh}|g" \
+        -e "s|__HOME__|${HOME}|g" \
+        "$PLIST_TEMPLATE" > "$PLIST_DEST"
+  else
+    cat > "$PLIST_DEST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.user.macos-slim</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>${slim_sh}</string>
+		<string>tick</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>KeepAlive</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>${HOME}/Library/Logs/macos-slim.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>${HOME}/Library/Logs/macos-slim.stderr.log</string>
+</dict>
+</plist>
+EOF
+  fi
   chmod 644 "$PLIST_DEST"
 }
 
@@ -246,7 +274,7 @@ cmd_install() {
     chmod 644 "$HERE/root/com.user.macos-slim-root.plist" 2>/dev/null || true
   fi
 
-  install_plist
+  generate_launchagent
   ln -sfn "$HERE/macos-slim.sh" "$BIN_LINK"
   if [ ! -f "$ZSHRC" ] || ! grep -Fqs "$PATH_LINE" "$ZSHRC"; then
     printf '\n%s\n' "$PATH_LINE" >> "$ZSHRC"
