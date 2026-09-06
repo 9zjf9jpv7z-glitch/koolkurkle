@@ -17,6 +17,29 @@ New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
 body). Live rem LaunchAgents keep the old text path until EXIT — do not
 restart the 63k backfill or change rem flags.
 
+## Hybrid retrieve (MAILROOM §6.2 / PR-6)
+
+`retrieve(query, k=20, lane=None, after=None, before=None)` in
+`scripts/semantic_search.py` fuses FTS5 BM25 + sqlite-vec KNN with RRF.
+Query embed is instruct_version=v1 / 1024-d only (no 63k re-embed).
+Rerank is a fail-open stub (`rerank=None`; live Qwen3-Reranker is PR-7).
+ask_mail / HTTP / MCP stay out of scope (PR-8).
+
+Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
+vec **post-filter** after KNN. `lane=None` infers money / people / none.
+Recency `exp(-0.002 * age_days)` is skipped when `after`/`before` is set.
+
+Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
+
+```zsh
+~/MailArchive/.venv/bin/python scripts/semantic_search.py 'SDGE bill'
+~/MailArchive/.venv/bin/python scripts/semantic_search.py --json --k 20 'Caddell'
+~/MailArchive/.venv/bin/python scripts/semantic_search.py --lane money --after 2024-01-01 'invoice'
+~/MailArchive/.venv/bin/python scripts/semantic_search.py --cosine 'SDGE bill'
+# optional, once: populate messages_ids.identifiers (additive; no column rename)
+~/MailArchive/.venv/bin/python scripts/messages_ids.py --db ~/MailArchive/mailroom.sqlite --backfill
+```
+
 ## macos-slim (Mini only)
 
 SIP-safe Photos/media-analysis slimming on the Mac Mini M4 24GB (Tahoe
