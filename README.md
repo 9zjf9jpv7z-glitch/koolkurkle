@@ -44,6 +44,22 @@ Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 ~/MailArchive/.venv/bin/python scripts/messages_ids.py --db ~/MailArchive/mailroom.sqlite --backfill
 ```
 
+## SoR health (integrity + FTS/hybrid smoke)
+
+Read-only check of `$HOME/MailArchive/mailroom.sqlite` (or `$MAILROOM_DB`).
+Recipes, Mini copy-DB note, and exit codes:
+**[docs/sor-health.md](docs/sor-health.md)**.
+
+```zsh
+# MBP — SoR health + hybrid smoke
+~/MailArchive/.venv/bin/python ~/MailArchive/scripts/sor_health_pack.py
+```
+
+```zsh
+# Mini — SoR health + hybrid smoke (copy DB is OK; not a second writer)
+~/MailArchive/.venv/bin/python ~/MailArchive/scripts/sor_health_pack.py
+```
+
 ## macos-slim (Mini only)
 
 SIP-safe Photos/media-analysis slimming on the Mac Mini M4 24GB (Tahoe
