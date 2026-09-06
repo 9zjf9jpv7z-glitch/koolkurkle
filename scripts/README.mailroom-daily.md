@@ -1,7 +1,7 @@
 # Mini daily RAG (LaunchAgent)
 
-Steady-state Mailroom pipeline on **mac-mini.local**, login **Buck**. Entirely
-local: no Grok Bot, no cloud embed, no dual-write over SMB/NFS.
+Steady-state Mailroom pipeline on **mac-mini.local** (set your macOS login).
+Entirely local: no Grok Bot, no cloud embed, no dual-write over SMB/NFS.
 
 This repo ships the **driver**, **plist**, and **ask_mail stub**. It wires
 scripts that already live in `~/MailArchive/scripts` (headers / FTS / 8pm
@@ -90,12 +90,13 @@ security add-generic-password -a "$USER" -s mailroom.icloud.app-password -w
 Copy driver files into the silo, then bootstrap for the GUI session:
 
 ```zsh
+# Mini — substitute __HOME__ with $HOME (launchd does not expand $HOME)
 mkdir -p ~/MailArchive/scripts ~/MailArchive/logs ~/Library/LaunchAgents
 cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py scripts/ask_mail.py \
   ~/MailArchive/scripts/
 chmod +x ~/MailArchive/scripts/run_mailroom_daily.sh
-# edit paths if login is not Buck:
-cp launchd/com.mailroom.daily.plist ~/Library/LaunchAgents/com.mailroom.daily.plist
+sed "s|__HOME__|$HOME|g" launchd/com.mailroom.daily.plist \
+  > ~/Library/LaunchAgents/com.mailroom.daily.plist
 
 launchctl bootout gui/$(id -u)/com.mailroom.daily 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mailroom.daily.plist
@@ -111,6 +112,7 @@ Plist:
 - `KeepAlive` false
 - `PATH`, `PYTHONUNBUFFERED=1`
 - stdout / stderr under `~/MailArchive/logs/daily_rag.std{out,err}.log`
+- checked-in plist is a template (`__HOME__`); install substitutes `$HOME`
 
 Manual:
 
@@ -126,7 +128,7 @@ Manual:
 Prefer LaunchAgent. If you must use cron on the Mini:
 
 ```cron
-0 20 * * * /bin/zsh /Users/buck/MailArchive/scripts/run_mailroom_daily.sh
+0 20 * * * /bin/zsh $HOME/MailArchive/scripts/run_mailroom_daily.sh
 ```
 
 ## Mini vs MBP

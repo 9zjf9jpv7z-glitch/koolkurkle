@@ -193,7 +193,11 @@ def _row_text(conn: sqlite3.Connection, message_pk: str) -> tuple[str | None, st
             (message_pk,),
         ).fetchone()
         if row is not None:
-            mapping = dict(row) if not isinstance(row, sqlite3.Row) else dict(row)
+            mapping = (
+                dict(row)
+                if isinstance(row, sqlite3.Row)
+                else dict(zip(select, row))
+            )
             header = mapping.get("message_id_header")
             for key in ("subject", "snippet", "from_addr", "cleaned_body", "message_id_header"):
                 val = mapping.get(key)
@@ -210,7 +214,11 @@ def _row_text(conn: sqlite3.Connection, message_pk: str) -> tuple[str | None, st
             (message_pk,),
         ).fetchone()
         if fts is not None:
-            mapping = dict(fts)
+            mapping = (
+                dict(fts)
+                if isinstance(fts, sqlite3.Row)
+                else dict(zip(fts_sel, fts))
+            )
             for key in ("subject", "body", "from_addr"):
                 val = mapping.get(key)
                 if val:

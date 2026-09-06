@@ -4,7 +4,7 @@ iCloud mail retrieve scripts.
 
 ## Mini daily RAG
 
-LaunchAgent `com.mailroom.daily` on **mac-mini.local** (login Buck) runs the
+LaunchAgent `com.mailroom.daily` on **mac-mini.local** (set your macOS login) runs the
 local IMAP → FTS → classify/bills → incremental embed chain. No Grok Bot at
 runtime. Default SoR is Mini-local `~/MailArchive/mailroom.sqlite` — one
 writer, no SMB/NFS dual-write.
@@ -27,7 +27,11 @@ ask_mail / HTTP / MCP stay out of scope (PR-8).
 
 Lane + date: FTS **pre-filter** on `messages.lane` / `messages.date_utc`;
 vec **post-filter** after KNN. `lane=None` infers money / people / none.
-Recency `exp(-0.002 * age_days)` is skipped when `after`/`before` is set.
+If the lane was inferred and vec is empty after that filter, vec is re-run
+without the lane filter (live SoR lanes are sparse; FTS stays filtered).
+Explicit `--lane` stays strict. Recency `exp(-0.002 * age_days)` is skipped
+when `after`/`before` is set. Vec KNN selects `message_id, distance` only
+(live vec0 has no `v.rowid`).
 
 Mac smoke (Mini venv — Apple `/usr/bin/python3` cannot load sqlite-vec):
 
