@@ -35,14 +35,17 @@ Ollama generate/chat **cannot** score Qwen3-Reranker. Practice + traps:
 
 `scripts/ask_mail.py` is the PR-8 CLI + HTTP `127.0.0.1:8743` (`/ask`;
 8744 if bound) + MCP (`ask_mail`, `hybrid_search`, `get_thread`,
-non-sending `draft_reply`). Generate is **LM Studio**
-`/v1/chat/completions` when `$MAILROOM_GENERATE_MODEL` is set;
-soft-fail to labeled hits-only if down. Mini generate is the same
-LM Studio runtime (not unnamed Ollama 9B/27B). Smoke is **retrieve+rerank,
-then generate** — do not co-pin Ollama embed 8b, CrossEncoder, and
-LM Studio chat (35B-class); unload embed/rerank between phases.
-Recipes + DoD:
-**[docs/ask_mail.md](docs/ask_mail.md)**.
+non-sending `draft_reply`). Preferred generate **process** is
+`mlx_lm.server` on `http://127.0.0.1:1234/v1/chat/completions` when
+`$MAILROOM_GENERATE_MODEL` is set; soft-fail to labeled `fail-open-only`
+hits-only if down. Ollama is embed-only (never generate). Client path
+strings `llmster-headless` / `fail-open-only` stay in code — they are
+**not** the process name; withhold the product-name claim
+`llmster-headless`. Smoke is **retrieve+rerank, then generate** — do
+not co-pin Ollama embed 8b, CrossEncoder, and 35B-class generate;
+unload embed/rerank between phases. Recipes + DoD:
+**[docs/ask_mail.md](docs/ask_mail.md)**,
+**[docs/generate-mlx.md](docs/generate-mlx.md)**.
 `rerank_mode` is `crossencoder` when live floats land, else labeled
 fail-open / none / off (RRF citations; scores not claimed). Do not
 co-pin embed + 35B + rerank.

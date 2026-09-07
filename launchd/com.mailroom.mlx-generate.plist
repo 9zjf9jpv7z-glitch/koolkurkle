@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: install substitutes __HOME__ with $HOME (launchd does not expand $HOME).
+     PROCESS=mlx_lm.server. Generate-down is bootout/unload, not kill (KeepAlive). -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mailroom.mlx-generate</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__HOME__/MailArchive/scripts/mlx-generate-server.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/MailArchive/logs/mlx-generate.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/MailArchive/logs/mlx-generate.log</string>
+</dict>
+</plist>
