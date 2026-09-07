@@ -12,8 +12,8 @@ writer, no SMB/NFS dual-write.
 Install, Keychain **name** (`mailroom.imap.app-password`), Mini vs MBP
 cutover, and the 24h `last_daily_rag_ok` stamp:
 **[scripts/README.mailroom-daily.md](scripts/README.mailroom-daily.md)**.
-Human Terminal cards, Keychain create, privacy generics, PR description
-edit, and Little Snitch:
+Human Terminal cards, Keychain create, privacy generics, GitHub SoR
+(Build is staging), and Little Snitch:
 **[docs/ops-terminal.md](docs/ops-terminal.md)**.
 
 New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned

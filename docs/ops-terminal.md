@@ -98,13 +98,18 @@ bodies, and comments. Generics only:
 
 ## GitHub SoR / PR description
 
+Build is **staging**. GitHub `main` is the source of record.
+
 To change a PR description, edit the first Conversation comment
 (⋯ → Edit). The title pencil edits the title only.
 
-GitHub `main` is the source of record. After a PR merges to the wrong
-base, open compare `main...branch` and merge that PR so `main` receives
-the commits. Once a PR number exists, only **Merge** remains — do not
-re-instruct Create.
+After a Build merge, fold new preferred practices into the existing
+topical docs in the same cycle (generate / ask_mail / ops-terminal) —
+not a standalone lessons dump.
+
+After a PR merges to the wrong base, open compare `main...branch` and
+merge that PR so `main` receives the commits. Once a PR number exists,
+only **Merge** remains — do not re-instruct Create.
 
 ## Early-error traps (model / runtime)
 
@@ -186,7 +191,7 @@ Before a box / cloud agent reads a packet, sync that directory into
 `/workspace`. A Desktop file that was never synced is not visible to
 the box. Do not `git add` packet contents.
 
-Handoffs to a human use a named file attachment with a download link.
+Handoffs to a human use a named chat attachment with a download link.
 A Desktop path alone is not delivery.
 
 ```zsh

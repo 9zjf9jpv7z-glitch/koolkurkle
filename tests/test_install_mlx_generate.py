@@ -185,6 +185,8 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("fail-open-only", docs)
         self.assertIn("HARD DECK", docs)
         self.assertIn("install-mlx-generate.sh status", docs)
+        self.assertIn("com.mailroom.mlx-generate", docs)
+        self.assertIn("official paste", docs)
         self.assertNotIn("/Users/", docs)
 
 
