@@ -184,6 +184,7 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("llmster-headless", docs)
         self.assertIn("fail-open-only", docs)
         self.assertIn("HARD DECK", docs)
+        self.assertIn("install-mlx-generate.sh status", docs)
         self.assertNotIn("/Users/", docs)
 
 

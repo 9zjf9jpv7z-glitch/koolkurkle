@@ -41,6 +41,11 @@ RunAtLoad is **false**. The installer kickstarts after bootstrap. KeepAlive is
 ```
 
 ```zsh
+# MBP — dest paths + listener + GET /v1/models
+./scripts/install-mlx-generate.sh status
+```
+
+```zsh
 # MBP — verify listener
 curl -sS http://127.0.0.1:1234/v1/models
 ```
@@ -58,8 +63,9 @@ What `install` does:
 3. `launchctl bootstrap gui/$(id -u)` then `kickstart` (RunAtLoad is false).
 4. `curl http://127.0.0.1:1234/v1/models`.
 
-HARD DECK: the installer refuses a stub `ask_mail.py` (MCP placeholder /
-tiny file). It copies the SoR CLI; it does not replace it with a stub.
+HARD DECK: never overwrite `scripts/ask_mail.py` with an MCP stub or
+tiny placeholder. The installer refuses those files and copies the SoR
+CLI.
 
 ## Generate-down (KeepAlive)
 

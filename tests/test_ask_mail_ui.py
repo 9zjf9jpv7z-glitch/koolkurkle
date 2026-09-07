@@ -324,6 +324,8 @@ class HygieneAndDocsTests(unittest.TestCase):
         self.assertIn("Citations", ask_docs)
         self.assertIn("GET /message", ask_docs)
         self.assertIn("citation chip", ask_docs.lower())
+        self.assertIn("HARD DECK", ask_docs)
+        self.assertIn("official paste", ask_docs)
         self.assertIn("no attachment ingest", ask_docs.lower())
         self.assertNotIn("Mail.app", ask_docs)
         self.assertIn("fail-open-only", gen_docs)
