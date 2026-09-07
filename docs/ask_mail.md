@@ -172,9 +172,14 @@ MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
 ```
 
 ```zsh
-# MBP — HTTP loopback (8743; 8744 if bound)
+# MBP — HTTP loopback (8743; 8744 if bound). GET /ui is the thin same-origin UI.
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --serve
+```
+
+```zsh
+# MBP — open the UI (same origin as POST /ask; citations render as chips)
+# browser: http://127.0.0.1:8743/ui
 ```
 
 ```zsh
@@ -186,12 +191,45 @@ curl -sS http://127.0.0.1:8743/ask \
 
 ```zsh
 # Mini — MCP stdio (ask_mail, hybrid_search, get_thread, draft_reply)
+# Separate process from --serve: both block.
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
   $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --mcp
 ```
 
 `draft_reply` writes `drafts` + a file under `$HOME/MailArchive/drafts`.
 `send=true` is refused. No IMAP.
+
+## Thin loopback UI (GET /ui)
+
+`--serve` already binds `127.0.0.1:8743` (8744 if bound). GET `/ui` is a
+same-origin page that POST `/ask`. Citations render as chips and stay
+visible when generate is labeled `fail-open-only`. GET `/` and `/health`
+stay JSON (`ui=/ui`, `generate_process=mlx_lm.server`).
+
+`--serve` and `--mcp` both block. Start them as two processes.
+`mlx_lm.server` is a third process (LaunchAgent via
+`install-mlx-generate.sh`). No attachment ingest.
+
+```zsh
+# MBP — 1. generate process (KeepAlive; generate-down is bootout)
+./scripts/install-mlx-generate.sh
+```
+
+```zsh
+# MBP — 2. UI + HTTP ask. Open http://127.0.0.1:8743/ui
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+MAILROOM_GENERATE_MODEL="$MAILROOM_GENERATE_MODEL" \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --serve
+```
+
+```zsh
+# MBP / Mini — 3. MCP stdio (four tools; separate process from --serve)
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --mcp
+```
+
+Live generate down is labeled **fail-open-only** (hits-only, answer
+null). This UI job does not re-run live C-F probes.
 
 ## Injection
 

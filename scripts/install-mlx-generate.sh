@@ -51,6 +51,7 @@ TIMEOUT="${MAILROOM_INSTALL_VERIFY_TIMEOUT:-90}"
 SCRIPT_FILES=(
   mlx-generate-server.sh
   ask_mail.py
+  ask_mail_ui.py
   mailroom_generate.py
   ask_mail_generate_probes.py
   install-mlx-generate.sh
@@ -62,29 +63,28 @@ DOC_FILES=(
 )
 
 usage() {
-  cat <<'EOF'
-install-mlx-generate — MBP generate LaunchAgent (PROCESS=mlx_lm.server)
-
-  install   copy scripts+docs, stage plist, bootstrap, kickstart, curl /v1/models
-  stage     copy scripts+docs and stage plist only (no launchctl)
-  load      bootstrap + kickstart already-staged plist (RunAtLoad is false)
-  down      launchctl bootout — NOT kill (KeepAlive would restart)
-  status    print dest paths + listener + GET /v1/models
-  help      this text
-
-VERIFY_CMDS (operator):
-
-  curl -sS http://127.0.0.1:1234/v1/models
-  lsof -nP -iTCP:1234 -sTCP:LISTEN || echo ":1234 free"
-
-Generate-down:
-
-  ./scripts/install-mlx-generate.sh down
-  # equivalent:
-  launchctl bootout "gui/$(id -u)/com.mailroom.mlx-generate"
-
-Do not kill the mlx PID. KeepAlive is true.
-EOF
+  printf '%s\n' \
+    'install-mlx-generate — MBP generate LaunchAgent (PROCESS=mlx_lm.server)' \
+    '' \
+    '  install   copy scripts+docs, stage plist, bootstrap, kickstart, curl /v1/models' \
+    '  stage     copy scripts+docs and stage plist only (no launchctl)' \
+    '  load      bootstrap + kickstart already-staged plist (RunAtLoad is false)' \
+    '  down      launchctl bootout — NOT kill (KeepAlive would restart)' \
+    '  status    print dest paths + listener + GET /v1/models' \
+    '  help      this text' \
+    '' \
+    'VERIFY_CMDS (operator):' \
+    '' \
+    '  curl -sS http://127.0.0.1:1234/v1/models' \
+    '  lsof -nP -iTCP:1234 -sTCP:LISTEN || echo ":1234 free"' \
+    '' \
+    'Generate-down:' \
+    '' \
+    '  ./scripts/install-mlx-generate.sh down' \
+    '  # equivalent:' \
+    '  launchctl bootout "gui/$(id -u)/com.mailroom.mlx-generate"' \
+    '' \
+    'Do not kill the mlx PID. KeepAlive is true.'
 }
 
 refuse_stub() {
@@ -98,7 +98,7 @@ refuse_stub() {
     exit 2
   fi
   local bytes
-  bytes="$(wc -c < "$src" | tr -d ' ')"
+  bytes="$(wc -c "$src" | awk '{print $1}')"
   if [ "$bytes" -lt 10000 ]; then
     echo "HARD DECK: refusing stub ask_mail.py (size ${bytes})" >&2
     exit 2
