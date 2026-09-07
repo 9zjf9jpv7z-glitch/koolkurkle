@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""ask_mail: hybrid retrieve + optional LM Studio generate (PR-8).
+"""ask_mail: hybrid retrieve + optional OpenAI-compatible generate (PR-8).
 
 CLI, loopback HTTP (127.0.0.1:8743, or 8744 if bound), and MCP stdio.
 Retrieve is ``semantic_search.retrieve()``. Citations follow Hit order
 (RRF when ``Hit.rerank`` is null). Mail bodies are DATA. Drafts only —
 never send. ``ask_audit`` stores query + ids + model + host, never bodies.
 
-Generate runtime is **LM Studio** OpenAI-compatible ``/v1/chat/completions``
-when ``$MAILROOM_GENERATE_MODEL`` is set (optional
-``$MAILROOM_LM_STUDIO_URL``, default ``http://127.0.0.1:1234``). Soft-fail
-to labeled hits-only if the endpoint is down. Mini generate is the same
-LM Studio path — not unnamed Ollama 9B/27B chat.
+Preferred generate **process** is ``mlx_lm.server`` on
+``http://127.0.0.1:1234/v1/chat/completions`` when
+``$MAILROOM_GENERATE_MODEL`` is set (optional ``$MAILROOM_LM_STUDIO_URL`` /
+``$MAILROOM_GENERATE_URL``). Client path strings ``llmster-headless`` /
+``fail-open-only`` stay in code; they are **not** the process name.
+Withhold the product-name claim ``llmster-headless``. Soft-fail to labeled
+hits-only if the endpoint is down. Ollama is embed-only — never generate.
 
 Rerank default is in-process CrossEncoder (PR-7b / lock C). Missing
 torch/weights or predict failure → fail-open RRF (``rerank=None``,
@@ -47,6 +49,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import semantic_search as ss  # noqa: E402
+import mailroom_generate as mg  # noqa: E402
 from sqlite_pragmas import apply_reader_pragmas  # noqa: E402
 
 DEFAULT_K = 8
@@ -54,7 +57,8 @@ DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8743
 FALLBACK_HTTP_PORT = 8744
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
-GENERATE_RUNTIME = "lm_studio"
+GENERATE_RUNTIME = "mlx_lm.server"
+GENERATE_PROCESS = "mlx_lm.server"
 BODY_CHAR_CAP = 4000
 GENERATE_MAX_TOKENS = 512
 PROBE_MAX_TOKENS = 8
@@ -456,12 +460,28 @@ def generate_answer(
         "model": model,
         "messages": build_generate_messages(query, citations, data_block),
         "temperature": 0,
-        "max_tokens": int(max_tokens),
+        "max_tokens": mg.clamp_max_tokens(max_tokens),
     }
+    payload.update(mg.THINKING_OFF_FIELDS)
     try:
         status, data = _post_json(url, payload, opener=opener, timeout=wait)
     except AskMailError as exc:
-        return None, str(exc)
+        if str(exc) in {"wrong_model", "lm_studio_http"} and any(
+            k in payload for k in mg.THINKING_OFF_FIELDS
+        ):
+            retry = {k: v for k, v in payload.items() if k not in mg.THINKING_OFF_FIELDS}
+            try:
+                status, data = _post_json(url, retry, opener=opener, timeout=wait)
+            except AskMailError as exc2:
+                return None, str(exc2)
+        else:
+            return None, str(exc)
+    if status == 400 and any(k in payload for k in mg.THINKING_OFF_FIELDS):
+        retry = {k: v for k, v in payload.items() if k not in mg.THINKING_OFF_FIELDS}
+        try:
+            status, data = _post_json(url, retry, opener=opener, timeout=wait)
+        except AskMailError as exc:
+            return None, str(exc)
     if status != 200:
         return None, "wrong_model" if status in (400, 404) else "lm_studio_http"
     choices = data.get("choices")
@@ -491,8 +511,9 @@ def probe_lm_studio(
     base = base_url or default_lm_studio_url()
     out: dict[str, Any] = {
         "ok": False,
-        "probe": "lm_studio_chat_completions",
+        "probe": "generate_chat_completions",
         "runtime": GENERATE_RUNTIME,
+        "process": GENERATE_PROCESS,
         "url": _join_url(base, "/v1/chat/completions"),
         "model": tag,
         "status": None,
@@ -624,6 +645,15 @@ def write_ask_audit(
         sys.stderr.write("warning: ask_audit write failed (no bodies stored)\n")
 
 
+def path_label_for(generate_mode: str) -> str | None:
+    """Client path string. Not the process name. Withhold product claim."""
+    if generate_mode == "lm_studio":
+        return mg.PATH_LLMSTER
+    if generate_mode == "fail_open":
+        return mg.PATH_FAIL_OPEN
+    return None
+
+
 def _base_response(
     query: str,
     hits: list[dict[str, Any]],
@@ -637,6 +667,7 @@ def _base_response(
     draft: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     citations = citations_from_hits(hits)
+    path = path_label_for(generate_mode)
     return {
         "query": query,
         "hits": hits,
@@ -646,6 +677,9 @@ def _base_response(
         "generate_mode": generate_mode,
         "rerank_mode": rerank_mode,
         "generate_runtime": GENERATE_RUNTIME,
+        "generate_process": GENERATE_PROCESS,
+        "path": path,
+        "fail_open": generate_mode == "fail_open",
         "generate_model": model,
         "generate_host": host or default_host(),
         "generate_error": generate_error,
@@ -826,6 +860,33 @@ def ask(
     except AskMailError:
         data_rows = []
     data_block = wrap_mail_data(data_rows)
+    if generate_fn is None:
+        try:
+            mg.unload_embed()
+        except mg.GenerateDown as exc:
+            err = "embed_unload_failed"
+            sys.stderr.write("warning: generate fail-open: %s; hits-only\n" % exc)
+            result = _base_response(
+                q,
+                hits,
+                generate_mode="fail_open",
+                rerank_mode=mode_rerank,
+                generate_error=err,
+                model=tag,
+                host=host,
+            )
+            if audit:
+                write_ask_audit(
+                    path,
+                    query=q,
+                    k=k,
+                    citations=citations,
+                    model=tag,
+                    host=host,
+                    generate_mode="fail_open",
+                    rerank_mode=mode_rerank,
+                )
+            return result
     worker = generate_fn or generate_answer
     if generate_fn is not None:
         answer, err = worker(q, citations, data_block)
@@ -1094,6 +1155,7 @@ class AskHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "ask_mail",
                     "generate_runtime": GENERATE_RUNTIME,
+                    "generate_process": GENERATE_PROCESS,
                     "generate_mode": (
                         "lm_studio" if default_generate_model() else "hits_only"
                     ),
@@ -1517,9 +1579,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Sequential smoke: retrieve+rerank (embed resident) then "
-            "unload CrossEncoder / embed before LM Studio generate. "
-            "Do not pin Ollama embed 8b and LM Studio chat (35B-class) together. "
-            "Unload embed between phases. See docs/ask_mail.md."
+            "unload CrossEncoder / embed before mlx_lm.server generate. "
+            "Do not pin Ollama embed 8b and generate (35B-class) together. "
+            "Unload embed between phases. Process is mlx_lm.server. "
+            "See docs/ask_mail.md."
         ),
     )
     parser.add_argument(
@@ -1616,7 +1679,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
         if result.get("ok"):
-            sys.stderr.write("probe PASS  runtime=lm_studio  object=chat.completion\n")
+            sys.stderr.write("probe PASS  process=mlx_lm.server  object=chat.completion\n")
             return 0
         sys.stderr.write(
             "probe FAIL  error=%s  generate_mode=fail_open\n" % result.get("error")
