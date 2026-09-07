@@ -56,6 +56,7 @@ class InstallerStageTests(unittest.TestCase):
         for name in (
             "mlx-generate-server.sh",
             "ask_mail.py",
+            "ask_mail_ui.py",
             "mailroom_generate.py",
             "ask_mail_generate_probes.py",
             "install-mlx-generate.sh",
@@ -82,6 +83,10 @@ class InstallerStageTests(unittest.TestCase):
         )
         self.assertIn("__HOME__", template)
         self.assertGreater((self.mail / "scripts" / "ask_mail.py").stat().st_size, 10000)
+        ui = self.mail / "scripts" / "ask_mail_ui.py"
+        self.assertTrue(ui.is_file())
+        self.assertGreater(ui.stat().st_size, 1000)
+        self.assertIn("UI_PATH", ui.read_text(encoding="utf-8"))
 
     def test_install_skips_launchctl_when_asked(self) -> None:
         proc = _run([str(INSTALLER), "install"], self.env)

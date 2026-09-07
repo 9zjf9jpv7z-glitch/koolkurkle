@@ -21,7 +21,7 @@ torch/weights or predict failure → fail-open RRF (``rerank=None``,
 Qwen3-Reranker.
 
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --json 'SDGE bill'
-  $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --serve
+  $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --serve   # GET /ui + POST /ask
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --mcp
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --probe
 """
@@ -51,6 +51,7 @@ if str(SCRIPTS) not in sys.path:
 
 import semantic_search as ss  # noqa: E402
 from sqlite_pragmas import apply_reader_pragmas  # noqa: E402
+import ask_mail_ui as ask_ui  # noqa: E402
 
 DEFAULT_K = 8
 DEFAULT_HTTP_HOST = "127.0.0.1"
@@ -1109,8 +1110,18 @@ class AskHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _write_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path in (ask_ui.UI_PATH, "/ui.html"):
+            self._write_bytes(200, ask_ui.page_bytes(), ask_ui.CONTENT_TYPE)
+            return
         if parsed.path in ("/health", "/"):
             cfg = self._cfg()
             self._write_json(
@@ -1119,6 +1130,8 @@ class AskHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "ask_mail",
                     "generate_runtime": GENERATE_RUNTIME,
+                    "generate_process": GENERATE_PROCESS,
+                    "ui": ask_ui.UI_PATH,
                     "generate_mode": (
                         "lm_studio" if default_generate_model() else "hits_only"
                     ),
@@ -1291,7 +1304,7 @@ def serve_http(config: dict[str, Any]) -> int:
     httpd = bind_http_server(host, preferred, fallback, config)
     bound = httpd.server_address[1]
     sys.stderr.write(
-        "ask_mail listening http://%s:%s/ask  generate_runtime=%s  "
+        "ask_mail listening http://%s:%s/ui  POST /ask  generate_runtime=%s  "
         "rerank_mode labeled (crossencoder|fail_open|none|off)\n"
         % (host, bound, GENERATE_RUNTIME)
     )
@@ -1316,7 +1329,7 @@ def mcp_tool_schemas() -> list[dict[str, Any]]:
         {
             "name": "ask_mail",
             "description": (
-                "Hybrid retrieve plus optional LM Studio generate. "
+                "Hybrid retrieve plus optional mlx_lm.server generate. "
                 "Drafts only. Citations follow Hit order."
             ),
             "inputSchema": {
@@ -1555,7 +1568,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--serve",
         action="store_true",
-        help="HTTP loopback 127.0.0.1:8743 (/ask; 8744 if bound).",
+        help="HTTP loopback 127.0.0.1:8743 (GET /ui + POST /ask; 8744 if bound).",
     )
     parser.add_argument(
         "--mcp",

@@ -48,7 +48,8 @@ curl -sS http://127.0.0.1:1234/v1/models
 What `install` does:
 
 1. Copy `scripts/mlx-generate-server.sh`, `scripts/ask_mail.py`,
-   `scripts/mailroom_generate.py`, `scripts/ask_mail_generate_probes.py`,
+   `scripts/ask_mail_ui.py`, `scripts/mailroom_generate.py`,
+   `scripts/ask_mail_generate_probes.py`,
    and this installer into `$HOME/MailArchive/scripts/` (plus docs into
    `$HOME/MailArchive/docs/`).
 2. Stage `launchd/com.mailroom.mlx-generate.plist` →
@@ -97,4 +98,32 @@ as the generate path. Do not Ollama chat/generate.
 
 Client library: `scripts/mailroom_generate.py`. Live CLI remains
 `scripts/ask_mail.py`. Headless probes (C/D/E/F):
-`scripts/ask_mail_generate_probes.py`.
+`scripts/ask_mail_generate_probes.py`. GET `/ui` is served by
+`--serve` from `scripts/ask_mail_ui.py` (same-origin POST `/ask`).
+
+## UI + MCP + generate (three processes)
+
+`--serve` (GET /ui + POST /ask) and `--mcp` (stdio) both block.
+Run them as two processes. `mlx_lm.server` is the third (LaunchAgent).
+
+```zsh
+# MBP — 1. generate process
+./scripts/install-mlx-generate.sh
+```
+
+```zsh
+# MBP — 2. loopback UI (open http://127.0.0.1:8743/ui)
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+MAILROOM_GENERATE_MODEL="$MAILROOM_GENERATE_MODEL" \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --serve
+```
+
+```zsh
+# MBP — 3. MCP stdio (ask_mail, hybrid_search, get_thread, draft_reply)
+MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
+  $HOME/MailArchive/.venv/bin/python $HOME/MailArchive/scripts/ask_mail.py --mcp
+```
+
+Installer copies `scripts/ask_mail_ui.py` next to `ask_mail.py`.
+Live generate down is labeled **fail-open-only** (hits-only). This
+document does not re-run live C-F probes. No attachment ingest.
