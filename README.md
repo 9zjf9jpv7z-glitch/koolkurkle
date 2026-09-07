@@ -41,7 +41,11 @@ non-sending `draft_reply`). Preferred generate **process** is
 hits-only if down. Ollama is embed-only (never generate). Client path
 strings `llmster-headless` / `fail-open-only` stay in code — they are
 **not** the process name; withhold the product-name claim
-`llmster-headless`. Smoke is **retrieve+rerank, then generate** — do
+`llmster-headless`. One-command MBP install (copy scripts, stage
+LaunchAgent, bootstrap, kickstart, `GET /v1/models`):
+**[scripts/install-mlx-generate.sh](scripts/install-mlx-generate.sh)**
+— generate-down is `./scripts/install-mlx-generate.sh down` (bootout,
+not kill; KeepAlive). Smoke is **retrieve+rerank, then generate** — do
 not co-pin Ollama embed 8b, CrossEncoder, and 35B-class generate;
 unload embed/rerank between phases. Recipes + DoD:
 **[docs/ask_mail.md](docs/ask_mail.md)**,

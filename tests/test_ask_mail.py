@@ -575,6 +575,7 @@ class HygieneAndDocsTests(unittest.TestCase):
             ROOT / "docs" / "model-runtime-gates.md",
             ROOT / "docs" / "generate-mlx.md",
             ROOT / "README.md",
+            SCRIPTS / "install-mlx-generate.sh",
         ]
         forbidden = (
             "EXAMPLE_USER_LOCAL",
