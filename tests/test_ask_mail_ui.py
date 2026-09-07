@@ -46,9 +46,16 @@ class PageBytesTests(unittest.TestCase):
             "Same-origin POST /ask",
             "Citations stay visible",
             "--mcp",
+            "fetch(\"/message?id=\"",
+            "data-id=",
+            "Click a citation chip",
+            "GET /message",
         ):
             self.assertIn(token, page)
+        self.assertEqual(ask_ui.MESSAGE_PATH, "/message")
         self.assertNotIn("attachment", page.lower())
+        self.assertNotIn("Mail.app", page)
+        self.assertNotIn("message://", page)
         self.assertNotIn("/Users/", page)
         self.assertNotIn("@me.com", page)
 
@@ -61,8 +68,11 @@ class PageBytesTests(unittest.TestCase):
         banner_close = page.find(LT + "/div" + chr(62), banner_at)
         self.assertGreater(cites_at, banner_close)
         self.assertIn('id="answer"', page)
+        self.assertIn('id="pane"', page)
         self.assertIn('id="hits"', page)
         self.assertIn('id="labels"', page)
+        pane_at = page.find('id="pane"')
+        self.assertGreater(pane_at, cites_at)
 
     def test_js_esc_entities_survived_encode(self) -> None:
         page = ask_ui.page_text()
@@ -132,6 +142,7 @@ class HttpUiTests(unittest.TestCase):
                 self.assertEqual(hbody["ui"], "/ui")
                 self.assertEqual(hbody["generate_process"], "mlx_lm.server")
                 self.assertEqual(hbody["generate_runtime"], "mlx_lm.server")
+                self.assertEqual(hbody["message"], "/message")
 
                 root = HTTPConnection("127.0.0.1", port, timeout=5)
                 root.request("GET", "/")
@@ -168,6 +179,70 @@ class HttpUiTests(unittest.TestCase):
             finally:
                 httpd.shutdown()
                 httpd.server_close()
+
+    def test_get_message_found_and_fail_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            httpd = self._serve(tmp)
+            port = httpd.server_address[1]
+            try:
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("GET", "/message?id=m4")
+                resp = conn.getresponse()
+                payload = json.loads(resp.read().decode("utf-8"))
+                conn.close()
+                self.assertEqual(resp.status, 200)
+                self.assertTrue(payload["ok"])
+                self.assertFalse(payload["fail_open"])
+                self.assertEqual(payload["message_id"], "m4")
+                self.assertEqual(payload["subject"], "Invoice due Friday")
+                self.assertIn("Please pay invoice 44", payload["body"] or "")
+                self.assertEqual(payload["generate_process"], "mlx_lm.server")
+
+                miss = HTTPConnection("127.0.0.1", port, timeout=5)
+                miss.request("GET", "/message?id=no-such")
+                mresp = miss.getresponse()
+                mbody = json.loads(mresp.read().decode("utf-8"))
+                miss.close()
+                self.assertEqual(mresp.status, 200)
+                self.assertFalse(mbody["ok"])
+                self.assertTrue(mbody["fail_open"])
+                self.assertEqual(mbody["path"], "fail-open-only")
+                self.assertIsNone(mbody["body"])
+                self.assertEqual(mbody["message_id"], "no-such")
+
+                empty = HTTPConnection("127.0.0.1", port, timeout=5)
+                empty.request("GET", "/message")
+                eres = empty.getresponse()
+                ebody = json.loads(eres.read().decode("utf-8"))
+                empty.close()
+                self.assertEqual(eres.status, 200)
+                self.assertTrue(ebody["fail_open"])
+                self.assertEqual(ebody["path"], "fail-open-only")
+                self.assertIsNone(ebody["body"])
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
+
+class GetMessageFnTests(unittest.TestCase):
+    def test_get_message_never_invents_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            _make_db(db)
+            found = ask_mail.get_message(db=db, message_id="m1")
+            self.assertTrue(found["ok"])
+            self.assertEqual(found["message_id"], "m1")
+            self.assertIn("iCloud", found["body"] or found["subject"])
+            self.assertFalse(found["fail_open"])
+            missing = ask_mail.get_message(db=db, message_id="invented-id")
+            self.assertFalse(missing["ok"])
+            self.assertTrue(missing["fail_open"])
+            self.assertEqual(missing["path"], "fail-open-only")
+            self.assertIsNone(missing["body"])
+            self.assertEqual(missing["message_id"], "invented-id")
+            blank = ask_mail.get_message(db=db, message_id="  ")
+            self.assertTrue(blank["fail_open"])
+            self.assertIsNone(blank["message_id"])
 
 
 class McpStillWorksTests(unittest.TestCase):
@@ -247,7 +322,10 @@ class HygieneAndDocsTests(unittest.TestCase):
         self.assertIn("ask_mail_ui.py", installer)
         self.assertIn("two processes", ask_docs.lower())
         self.assertIn("Citations", ask_docs)
+        self.assertIn("GET /message", ask_docs)
+        self.assertIn("citation chip", ask_docs.lower())
         self.assertIn("no attachment ingest", ask_docs.lower())
+        self.assertNotIn("Mail.app", ask_docs)
         self.assertIn("fail-open-only", gen_docs)
         self.assertIn("not `kill`", gen_docs)
 

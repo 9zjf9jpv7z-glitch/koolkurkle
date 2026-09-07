@@ -21,7 +21,7 @@ torch/weights or predict failure → fail-open RRF (``rerank=None``,
 Qwen3-Reranker.
 
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --json 'SDGE bill'
-  $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --serve   # GET /ui + POST /ask
+  $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --serve   # GET /ui + POST /ask + GET /message
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --mcp
   $HOME/MailArchive/.venv/bin/python scripts/ask_mail.py --probe
 """
@@ -989,6 +989,102 @@ def get_thread(
         conn.close()
 
 
+def get_message(
+    *,
+    db: Path | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any]:
+    """Load one existing message for the loopback UI. Never invent ids.
+
+    Missing / empty id is labeled fail-open-only (hits-only, body null).
+    """
+    labels = {
+        "generate_mode": "hits_only",
+        "generate_runtime": GENERATE_RUNTIME,
+        "generate_process": GENERATE_PROCESS,
+        "rerank_mode": "none",
+        "path": None,
+        "fail_open": False,
+        "ok": True,
+        "error": None,
+    }
+    mid = (message_id or "").strip()
+    if not mid:
+        labels.update(
+            {
+                "ok": False,
+                "fail_open": True,
+                "path": PATH_FAIL_OPEN,
+                "error": "message_id required",
+                "message_id": None,
+                "thread_id": None,
+                "date": None,
+                "from": None,
+                "subject": None,
+                "body": None,
+                "lane": None,
+                "auth_shaped": False,
+            }
+        )
+        return labels
+    path = Path(db).expanduser() if db is not None else default_db_path()
+    try:
+        conn = connect(path)
+    except AskMailError as exc:
+        labels.update(
+            {
+                "ok": False,
+                "fail_open": True,
+                "path": PATH_FAIL_OPEN,
+                "error": str(exc),
+                "message_id": mid,
+                "thread_id": None,
+                "date": None,
+                "from": None,
+                "subject": None,
+                "body": None,
+                "lane": None,
+                "auth_shaped": False,
+            }
+        )
+        return labels
+    try:
+        loaded = load_mail_data(conn, mid)
+    finally:
+        conn.close()
+    if loaded is None:
+        labels.update(
+            {
+                "ok": False,
+                "fail_open": True,
+                "path": PATH_FAIL_OPEN,
+                "error": "message_id not found",
+                "message_id": mid,
+                "thread_id": None,
+                "date": None,
+                "from": None,
+                "subject": None,
+                "body": None,
+                "lane": None,
+                "auth_shaped": False,
+            }
+        )
+        return labels
+    labels.update(
+        {
+            "message_id": loaded["message_id"],
+            "thread_id": loaded.get("thread_id"),
+            "date": loaded.get("date"),
+            "from": loaded.get("from"),
+            "subject": loaded.get("subject"),
+            "body": loaded.get("body"),
+            "lane": loaded.get("lane"),
+            "auth_shaped": bool(loaded.get("auth_shaped")),
+        }
+    )
+    return labels
+
+
 def draft_reply(
     *,
     db: Path | None = None,
@@ -1132,6 +1228,7 @@ class AskHandler(BaseHTTPRequestHandler):
                     "generate_runtime": GENERATE_RUNTIME,
                     "generate_process": GENERATE_PROCESS,
                     "ui": ask_ui.UI_PATH,
+                    "message": "/message",
                     "generate_mode": (
                         "lm_studio" if default_generate_model() else "hits_only"
                     ),
@@ -1157,6 +1254,15 @@ class AskHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._write_json(200, result)
+            return
+        if parsed.path == "/message":
+            qs = parse_qs(parsed.query)
+            mid = (qs.get("id") or qs.get("message_id") or [""])[0]
+            cfg = self._cfg()
+            self._write_json(
+                200,
+                get_message(db=cfg.get("db"), message_id=mid),
+            )
             return
         self._write_json(
             404,
@@ -1304,7 +1410,7 @@ def serve_http(config: dict[str, Any]) -> int:
     httpd = bind_http_server(host, preferred, fallback, config)
     bound = httpd.server_address[1]
     sys.stderr.write(
-        "ask_mail listening http://%s:%s/ui  POST /ask  generate_runtime=%s  "
+        "ask_mail listening http://%s:%s/ui  POST /ask  GET /message  generate_runtime=%s  "
         "rerank_mode labeled (crossencoder|fail_open|none|off)\n"
         % (host, bound, GENERATE_RUNTIME)
     )
@@ -1568,7 +1674,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--serve",
         action="store_true",
-        help="HTTP loopback 127.0.0.1:8743 (GET /ui + POST /ask; 8744 if bound).",
+        help="HTTP loopback 127.0.0.1:8743 (GET /ui + POST /ask + GET /message; 8744 if bound).",
     )
     parser.add_argument(
         "--mcp",
