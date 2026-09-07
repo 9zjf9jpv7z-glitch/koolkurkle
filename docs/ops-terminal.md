@@ -19,6 +19,13 @@ These cards are chat/operator steps. They are not the writer-lock file
 Work one Action-required card at a time. A single card may list several
 steps for **one** machine.
 
+Write the next action (a paste-ready command). Prefer **TO DO** over a
+list of don'ts — a stuck human needs the next step.
+
+When a human is stuck, first check whether the card's instructions
+were wrong or aimed at the other machine. Fix the card, then re-issue
+one Action-required.
+
 ## One machine per card
 
 - One host per card. A **MBP** or **Mini** banner on the first line
@@ -89,10 +96,20 @@ bodies, and comments. Generics only:
 - `$HOME` / `__HOME__`
 - `USERNAME`
 
-## GitHub PR description
+## GitHub SoR / PR description
+
+Build is **staging**. GitHub `main` is the source of record.
 
 To change a PR description, edit the first Conversation comment
 (⋯ → Edit). The title pencil edits the title only.
+
+After a Build merge, fold new preferred practices into the existing
+topical docs in the same cycle (generate / ask_mail / ops-terminal) —
+not a standalone lessons dump.
+
+After a PR merges to the wrong base, open compare `main...branch` and
+merge that PR so `main` receives the commits. Once a PR number exists,
+only **Merge** remains — do not re-instruct Create.
 
 ## Early-error traps (model / runtime)
 
@@ -103,6 +120,9 @@ label.
 
 1. **Interface proof** — `curl` or `ask_mail.py --probe` against the
    official path (LM Studio `/v1/chat/completions`, locked model id).
+   Live generate PASS is an official paste (human Terminal paste or
+   explicit accept of CoS JSON). Merge may be labeled
+   **fail-open-only** when live is not re-run.
 2. **Negative smoke** — garbage / stopped / wrong model / port closed /
    unreachable must fail or labeled-fail-open.
 3. **Official path named** — community GGUF
@@ -170,6 +190,9 @@ Canonical on the Mac Desktop: `$HOME/Desktop/Heavy-Bot/to-bot`.
 Before a box / cloud agent reads a packet, sync that directory into
 `/workspace`. A Desktop file that was never synced is not visible to
 the box. Do not `git add` packet contents.
+
+Handoffs to a human use a named chat attachment with a download link.
+A Desktop path alone is not delivery.
 
 ```zsh
 # MBP — canonical Heavy packets (Desktop)

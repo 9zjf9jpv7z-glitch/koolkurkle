@@ -147,12 +147,15 @@ Mocks in `tests/test_ask_mail.py`. Live MBP matrix is the operator gate.
 ## Definition of Done
 
 - [ ] Interface proof PASS (curl or `--probe`) on MBP with locked model id.
+      Live PASS is an official paste (human Terminal paste or explicit
+      accept of CoS JSON).
 - [ ] Negative smoke PASS (stopped / wrong model / port closed / unreachable).
 - [ ] Schema labels present (`generate_mode`, `rerank_mode`, `path`).
 - [ ] Rerank default is CrossEncoder. Fail-open is labeled when scores
       cannot run. No Ollama-as-working-scorer.
-- [ ] Else: explicit **fail-open-only** label before merge. CoS withholds
-      merge AR without probe PASS or that label.
+- [ ] Else: explicit **fail-open-only** label before merge (including
+      when live is not re-run). CoS withholds merge AR without probe
+      PASS or that label.
 
 ## CLI
 
@@ -216,7 +219,9 @@ GET `/` and `/health` stay JSON (`ui=/ui`, `message=/message`,
 
 `--serve` and `--mcp` both block. Start them as two processes.
 `mlx_lm.server` is a third process (LaunchAgent via
-`install-mlx-generate.sh`). No attachment ingest.
+`install-mlx-generate.sh`). HARD DECK: never overwrite
+`scripts/ask_mail.py` with an MCP stub or tiny placeholder — `--serve`
+/ `--mcp` are flags on the SoR CLI. No attachment ingest.
 
 ```zsh
 # MBP — 1. generate process (KeepAlive; generate-down is bootout)

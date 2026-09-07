@@ -8,6 +8,7 @@ probes from this document.
 | Field | Value | Meaning |
 |---|---|---|
 | Process | `mlx_lm.server` | What listens on `127.0.0.1:1234` |
+| LaunchAgent | `com.mailroom.mlx-generate` | KeepAlive; generate-down is bootout |
 | Client | OpenAI `POST /v1/chat/completions` | Unchanged |
 | `path` success | `llmster-headless` | **Code string only.** Withhold product-name claim |
 | `path` generate down | `fail-open-only` | Required label. Hits-only, `answer` null |
@@ -41,6 +42,11 @@ RunAtLoad is **false**. The installer kickstarts after bootstrap. KeepAlive is
 ```
 
 ```zsh
+# MBP — dest paths + listener + GET /v1/models
+./scripts/install-mlx-generate.sh status
+```
+
+```zsh
 # MBP — verify listener
 curl -sS http://127.0.0.1:1234/v1/models
 ```
@@ -58,8 +64,9 @@ What `install` does:
 3. `launchctl bootstrap gui/$(id -u)` then `kickstart` (RunAtLoad is false).
 4. `curl http://127.0.0.1:1234/v1/models`.
 
-HARD DECK: the installer refuses a stub `ask_mail.py` (MCP placeholder /
-tiny file). It copies the SoR CLI; it does not replace it with a stub.
+HARD DECK: never overwrite `scripts/ask_mail.py` with an MCP stub or
+tiny placeholder. The installer refuses those files and copies the SoR
+CLI.
 
 ## Generate-down (KeepAlive)
 
@@ -126,5 +133,7 @@ MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
 ```
 
 Installer copies `scripts/ask_mail_ui.py` next to `ask_mail.py`.
-Live generate down is labeled **fail-open-only** (hits-only). This
-document does not re-run live C-F probes. No attachment ingest.
+Live C–F PASS is an official paste (human Terminal paste or explicit
+accept of CoS JSON). This document does not re-run those probes. When
+live is not re-run, merge stays labeled **fail-open-only**. No
+attachment ingest.

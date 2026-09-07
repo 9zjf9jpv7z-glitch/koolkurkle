@@ -12,8 +12,8 @@ writer, no SMB/NFS dual-write.
 Install, Keychain **name** (`mailroom.imap.app-password`), Mini vs MBP
 cutover, and the 24h `last_daily_rag_ok` stamp:
 **[scripts/README.mailroom-daily.md](scripts/README.mailroom-daily.md)**.
-Human Terminal cards, Keychain create, privacy generics, PR description
-edit, and Little Snitch:
+Human Terminal cards, Keychain create, privacy generics, GitHub SoR
+(Build is staging), and Little Snitch:
 **[docs/ops-terminal.md](docs/ops-terminal.md)**.
 
 New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
@@ -47,7 +47,8 @@ strings `llmster-headless` / `fail-open-only` stay in code — they are
 LaunchAgent, bootstrap, kickstart, `GET /v1/models`):
 **[scripts/install-mlx-generate.sh](scripts/install-mlx-generate.sh)**
 — generate-down is `./scripts/install-mlx-generate.sh down` (bootout,
-not kill; KeepAlive). Smoke is **retrieve+rerank, then generate** — do
+not kill; KeepAlive); `status` prints dest paths and the listener.
+Smoke is **retrieve+rerank, then generate** — do
 not co-pin Ollama embed 8b, CrossEncoder, and 35B-class generate;
 unload embed/rerank between phases. Recipes + DoD:
 **[docs/ask_mail.md](docs/ask_mail.md)**,

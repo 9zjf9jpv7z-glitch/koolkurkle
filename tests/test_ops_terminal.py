@@ -23,6 +23,15 @@ class OpsTerminalDocTests(unittest.TestCase):
         text = OPS.read_text(encoding="utf-8")
         self.assertIn("One machine per card", text)
         self.assertIn("one Action-required card at a time", text)
+        self.assertIn("TO DO", text)
+        self.assertIn("first check whether the card's instructions", text)
+        self.assertIn("main...branch", text)
+        self.assertIn("only **Merge** remains", text)
+        self.assertIn("named chat attachment", text)
+        self.assertIn("download link", text)
+        self.assertIn("official paste", text)
+        self.assertIn("Build is **staging**", text)
+        self.assertIn("same cycle", text)
         self.assertIn("MBP", text)
         self.assertIn("Mini", text)
         self.assertIn("one command per fence", text)
@@ -62,6 +71,9 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertNotIn("/Users/", text)
         self.assertNotIn("-----BEGIN", text)
         self.assertNotIn("ak_live", text)
+        self.assertNotIn("kirkbacon", text)
+        self.assertNotIn("@me.com", text)
+        self.assertNotIn("@icloud.com", text)
 
     def test_linked_from_existing_docs(self):
         for path in (README, DAILY, RERANK, SLIM, HEALTH, LOCK, GATES, ASK):
