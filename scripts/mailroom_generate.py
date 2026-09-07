@@ -41,10 +41,8 @@ def clamp_max_tokens(value: int | str | None) -> int:
         n = MAX_TOKENS_DEFAULT
     else:
         n = int(value)
-    if n < MAX_TOKENS_MIN:
-        return MAX_TOKENS_MIN
-    if n > MAX_TOKENS_MAX:
-        return MAX_TOKENS_MAX
+    n = max(MAX_TOKENS_MIN, n)
+    n = min(MAX_TOKENS_MAX, n)
     return n
 
 

@@ -100,7 +100,7 @@ Expected raw PASS shape:
 {
   "id": "chatcmpl-…",
   "object": "chat.completion",
-  "model": "\u003cMAILROOM_GENERATE_MODEL\u003e",
+  "model": "$MAILROOM_GENERATE_MODEL",
   "choices": [
     {
       "index": 0,
