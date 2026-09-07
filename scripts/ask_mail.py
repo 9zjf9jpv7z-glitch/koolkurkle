@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""ask_mail: hybrid retrieve + optional LM Studio generate (PR-8).
+"""ask_mail: hybrid retrieve + optional mlx_lm.server generate (PR-8).
 
 CLI, loopback HTTP (127.0.0.1:8743, or 8744 if bound), and MCP stdio.
 Retrieve is ``semantic_search.retrieve()``. Citations follow Hit order
 (RRF when ``Hit.rerank`` is null). Mail bodies are DATA. Drafts only —
 never send. ``ask_audit`` stores query + ids + model + host, never bodies.
 
-Generate runtime is **LM Studio** OpenAI-compatible ``/v1/chat/completions``
-when ``$MAILROOM_GENERATE_MODEL`` is set (optional
-``$MAILROOM_LM_STUDIO_URL``, default ``http://127.0.0.1:1234``). Soft-fail
-to labeled hits-only if the endpoint is down. Mini generate is the same
-LM Studio path — not unnamed Ollama 9B/27B chat.
+Generate **process** is ``mlx_lm.server`` OpenAI-compatible
+``/v1/chat/completions`` when ``$MAILROOM_GENERATE_MODEL`` is set
+(optional ``$MAILROOM_LM_STUDIO_URL`` / ``$MAILROOM_GENERATE_URL``,
+default ``http://127.0.0.1:1234``). Soft-fail to labeled
+``fail-open-only`` hits-only if the endpoint is down. Client path string
+``llmster-headless`` may stay in JSON — it is **not** the process and
+is not a product-name claim. Mini generate is the same OpenAI path —
+not unnamed Ollama 9B/27B chat.
 
 Rerank default is in-process CrossEncoder (PR-7b / lock C). Missing
 torch/weights or predict failure → fail-open RRF (``rerank=None``,
@@ -54,9 +57,17 @@ DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8743
 FALLBACK_HTTP_PORT = 8744
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
-GENERATE_RUNTIME = "lm_studio"
+GENERATE_RUNTIME = "mlx_lm.server"
+GENERATE_PROCESS = "mlx_lm.server"
+PATH_SUCCESS = "llmster-headless"
+PATH_FAIL_OPEN = "fail-open-only"
 BODY_CHAR_CAP = 4000
-GENERATE_MAX_TOKENS = 512
+GENERATE_MAX_TOKENS = 768
+THINKING_OFF_FIELDS = {
+    "enable_thinking": False,
+    "think": False,
+    "reasoning": {"enabled": False, "effort": "none"},
+}
 PROBE_MAX_TOKENS = 8
 PROBE_USER = "Reply with the single word pong."
 DEFAULT_GENERATE_TIMEOUT = 30
@@ -458,6 +469,7 @@ def generate_answer(
         "temperature": 0,
         "max_tokens": int(max_tokens),
     }
+    payload.update(THINKING_OFF_FIELDS)
     try:
         status, data = _post_json(url, payload, opener=opener, timeout=wait)
     except AskMailError as exc:
@@ -491,8 +503,9 @@ def probe_lm_studio(
     base = base_url or default_lm_studio_url()
     out: dict[str, Any] = {
         "ok": False,
-        "probe": "lm_studio_chat_completions",
+        "probe": "generate_chat_completions",
         "runtime": GENERATE_RUNTIME,
+        "process": GENERATE_PROCESS,
         "url": _join_url(base, "/v1/chat/completions"),
         "model": tag,
         "status": None,
@@ -637,6 +650,15 @@ def _base_response(
     draft: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     citations = citations_from_hits(hits)
+    if generate_mode == "lm_studio":
+        path = PATH_SUCCESS
+        fail_open = False
+    elif generate_mode == "fail_open":
+        path = PATH_FAIL_OPEN
+        fail_open = True
+    else:
+        path = None
+        fail_open = False
     return {
         "query": query,
         "hits": hits,
@@ -646,6 +668,9 @@ def _base_response(
         "generate_mode": generate_mode,
         "rerank_mode": rerank_mode,
         "generate_runtime": GENERATE_RUNTIME,
+        "generate_process": GENERATE_PROCESS,
+        "path": path,
+        "fail_open": fail_open,
         "generate_model": model,
         "generate_host": host or default_host(),
         "generate_error": generate_error,
@@ -1616,7 +1641,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
         if result.get("ok"):
-            sys.stderr.write("probe PASS  runtime=lm_studio  object=chat.completion\n")
+            sys.stderr.write("probe PASS  runtime=mlx_lm.server  object=chat.completion\n")
             return 0
         sys.stderr.write(
             "probe FAIL  error=%s  generate_mode=fail_open\n" % result.get("error")

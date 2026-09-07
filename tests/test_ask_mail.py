@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PR-8 ask_mail tests. Mocks only — no live LM Studio, no SoR, no network."""
+"""PR-8 ask_mail tests. Mocks only — no live generate server, no SoR, no network."""
 
 from __future__ import annotations
 
@@ -182,7 +182,9 @@ class SchemaAndCitationTests(unittest.TestCase):
             )
         self.assertEqual(result["generate_mode"], "hits_only")
         self.assertEqual(result["rerank_mode"], "fail_open")
-        self.assertEqual(result["generate_runtime"], "lm_studio")
+        self.assertEqual(result["generate_runtime"], "mlx_lm.server")
+        self.assertEqual(result["generate_process"], "mlx_lm.server")
+        self.assertIsNone(result["path"])
         self.assertEqual(result["citations"], ["m4", "m1"])
         self.assertIsNone(result["answer"])
         self.assertIn("generate_mode", result)
@@ -224,6 +226,8 @@ class GenerateFailOpenTests(unittest.TestCase):
         with mock.patch("sys.stderr", err):
             result = self._ask_with_opener(opener)
         self.assertEqual(result["generate_mode"], "fail_open")
+        self.assertEqual(result["path"], "fail-open-only")
+        self.assertTrue(result["fail_open"])
         self.assertEqual(result["generate_error"], "port_closed")
         self.assertIsNone(result["answer"])
         self.assertIn("generate fail-open: port_closed", err.getvalue())
@@ -291,9 +295,15 @@ class GenerateFailOpenTests(unittest.TestCase):
 
         result = self._ask_with_opener(opener)
         self.assertEqual(result["generate_mode"], "lm_studio")
+        self.assertEqual(result["path"], "llmster-headless")
+        self.assertFalse(result["fail_open"])
+        self.assertEqual(result["generate_process"], "mlx_lm.server")
         self.assertIn("Invoice 44", result["answer"] or "")
         self.assertTrue(captured["url"].endswith("/v1/chat/completions"))
         self.assertEqual(captured["payload"]["model"], "locked-id")
+        self.assertGreaterEqual(captured["payload"]["max_tokens"], 512)
+        self.assertLessEqual(captured["payload"]["max_tokens"], 1024)
+        self.assertFalse(captured["payload"]["enable_thinking"])
         prompt = json.dumps(captured["payload"])
         self.assertIn(ask_mail.DATA_BEGIN, prompt)
         self.assertIn(ask_mail.DATA_END, prompt)
@@ -335,8 +345,9 @@ class ProbeTests(unittest.TestCase):
 
         result = ask_mail.probe_lm_studio(model="locked-id", opener=opener)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["probe"], "lm_studio_chat_completions")
-        self.assertEqual(result["runtime"], "lm_studio")
+        self.assertEqual(result["probe"], "generate_chat_completions")
+        self.assertEqual(result["runtime"], "mlx_lm.server")
+        self.assertEqual(result["process"], "mlx_lm.server")
         self.assertEqual(result["object"], "chat.completion")
         self.assertTrue(result["has_choices"])
         self.assertEqual(result["finish_reason"], "stop")
@@ -456,7 +467,7 @@ class HttpAndMcpTests(unittest.TestCase):
                 hbody = json.loads(hresp.read().decode("utf-8"))
                 health.close()
                 self.assertTrue(hbody["ok"])
-                self.assertEqual(hbody["generate_runtime"], "lm_studio")
+                self.assertEqual(hbody["generate_runtime"], "mlx_lm.server")
             finally:
                 httpd.shutdown()
                 httpd.server_close()
@@ -562,7 +573,7 @@ class HygieneAndDocsTests(unittest.TestCase):
             SCRIPTS / "ask_mail.py",
             ROOT / "docs" / "ask_mail.md",
             ROOT / "docs" / "model-runtime-gates.md",
-            ROOT / "docs" / "rerank.md",
+            ROOT / "docs" / "generate-mlx.md",
             ROOT / "README.md",
         ]
         forbidden = (
@@ -587,7 +598,7 @@ class HygieneAndDocsTests(unittest.TestCase):
             self.assertIn("generate_mode", text)
             self.assertIn("rerank_mode", text)
             self.assertIn("fail_open", text)
-            self.assertIn("LM Studio", text)
+            self.assertIn("mlx_lm.server", text)
             self.assertIn("interface proof", text.lower())
             self.assertIn("port_closed", text)
             self.assertIn("wrong_model", text)
@@ -603,7 +614,9 @@ class HygieneAndDocsTests(unittest.TestCase):
         self.assertNotIn("ollama pull dengcao", rerank)
         self.assertNotIn("ollama cp dengcao", rerank)
         self.assertNotIn("9B/27B if present", ask_docs)
-        self.assertIn("LM Studio", ask_docs)
+        self.assertIn("mlx_lm.server", ask_docs)
+        self.assertIn("llmster-headless", ask_docs)
+        self.assertIn("fail-open-only", ask_docs)
         self.assertIn("not unnamed ollama", ask_docs.lower())
         self.assertIn("--phase retrieve", ask_docs)
         self.assertIn("--phase generate", ask_docs)

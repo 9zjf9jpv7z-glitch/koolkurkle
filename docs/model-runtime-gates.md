@@ -11,9 +11,10 @@ forever): [rerank.md](rerank.md).
 
 ## Traps
 
-1. **Interface proof** — official path only. Generate: LM Studio
+1. **Interface proof** — official path only. Generate: `mlx_lm.server`
    `POST /v1/chat/completions` with the **locked**
-   `$MAILROOM_GENERATE_MODEL`. Rerank: CrossEncoder `predict` floats
+   `$MAILROOM_GENERATE_MODEL`. Path string `llmster-headless` is **not**
+   the process. Rerank: CrossEncoder `predict` floats
    (or last-token yes/no logits). Expected generate PASS shape is in
    [ask_mail.md](ask_mail.md) and `ask_mail.py --probe`. Expected
    rerank proof: `scripts/rerank_smoke.py` (relevant pair outscores
@@ -23,17 +24,16 @@ forever): [rerank.md](rerank.md).
    “succeeds” on any model is a failed gate. Rerank comma-garbage
    (`0.12, 0.45, 0.03`) or a scalar sold as N scores must exit
    non-zero (`rerank_smoke.py` / `tests/test_rerank_shape_smoke.py`).
-3. **Official path named** — LM Studio `/v1/chat/completions` for
+3. **Official path named** — `mlx_lm.server` `/v1/chat/completions` for
    generate; CrossEncoder on `Qwen/Qwen3-Reranker-0.6B` (MPS when
    available) for rerank. **Community GGUF is insufficient** without
    trap 1 PASS. Ollama `/api/generate` and `/api/chat` are the **wrong**
-   rerank interface — Ollama cannot score Qwen3-Reranker.
+   rerank interface **and** the wrong generate interface — Ollama is
+   embed-only.
 4. **fail-open-only must be labeled** — every ask_mail response
-   includes `generate_mode` and `rerank_mode`.
-   `rerank_mode` is `crossencoder` when live floats land, `fail_open`
-   when the extra/predict soft-fails, `none` for `--no-rerank`, `off`
-   for `MAILROOM_RERANK_BACKEND=off`. `hits_only` is explicit. Never
-   silent. When CI cannot load weights, label **fail-open-only**.
+   includes `generate_mode`, `rerank_mode`, `path`, and `fail_open`.
+   `path=fail-open-only` when generate is down. `path=llmster-headless`
+   is a client string, not a product/process claim.
 5. **CoS withholds merge AR** without trap 1 PASS **or** an explicit
    **fail-open-only** label on the PR.
 
@@ -41,9 +41,9 @@ forever): [rerank.md](rerank.md).
 
 | Surface | Runtime | Ready? |
 |---|---|---|
-| Generate | **LM Studio** `/v1/chat/completions` (MBP + Mini) | Only after probe PASS on MBP with locked model id |
-| Generate down | labeled `generate_mode=fail_open` → hits-only | fail-open-only |
-| Mini generate fallback | **LM Studio** (same path). Not unnamed Ollama 9B/27B | hits-only if LM Studio is not running |
+| Generate | **`mlx_lm.server`** `/v1/chat/completions` | Only after probe PASS on MBP with locked model id |
+| Generate down | labeled `path=fail-open-only` / `generate_mode=fail_open` | fail-open-only |
+| Mini generate | same OpenAI client. Not unnamed Ollama 9B/27B | hits-only if generate is not running |
 | Mini embed | Ollama `qwen3-embedding:8b` (official library tag) | embed only — not a scorer |
 | Rerank | CrossEncoder `Qwen/Qwen3-Reranker-0.6B` (`rerank_mode=crossencoder`) | Live floats after optional extra + weights |
 | Rerank missing extra / predict fail | fail-open RRF (`rerank=None`, `rerank_mode=fail_open`) | **fail-open-only** |
@@ -53,13 +53,13 @@ forever): [rerank.md](rerank.md).
 
 Retrieve+rerank with the **embed** runtime resident. Unload the
 CrossEncoder (`rerank_lib.unload_cross_encoder`) and/or short Ollama
-`keep_alive` **before** LM Studio 35B-class generate. Do not co-pin
+`keep_alive` **before** `mlx_lm.server` 35B-class generate. Do not co-pin
 embed + 35B + rerank.
 
 ## Interface proof (generate)
 
 ```zsh
-# MBP — LM Studio interface proof (locked model id)
+# MBP — mlx_lm.server interface proof (locked model id)
 curl -sS http://127.0.0.1:1234/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"'"$MAILROOM_GENERATE_MODEL"'","messages":[{"role":"user","content":"Reply with the single word pong."}],"max_tokens":8,"temperature":0}'
@@ -76,8 +76,8 @@ Expected PASS shape (`ask_mail.py --probe` normalizes this):
 ```json
 {
   "ok": true,
-  "probe": "lm_studio_chat_completions",
-  "runtime": "lm_studio",
+  "probe": "generate_chat_completions",
+  "runtime": "mlx_lm.server",
   "status": 200,
   "object": "chat.completion",
   "has_choices": true,
@@ -86,9 +86,9 @@ Expected PASS shape (`ask_mail.py --probe` normalizes this):
 }
 ```
 
-Raw LM Studio `200` body must be `object=chat.completion` with a
+Raw `200` body must be `object=chat.completion` with a
 non-empty `choices[0].message.content` and a `model` that matches the
-locked id. Anything else is FAIL.
+locked id. Anything else is FAIL. Process is `mlx_lm.server`.
 
 ## Interface proof (rerank)
 
@@ -115,7 +115,7 @@ Fixture: `tests/fixtures/rerank_interface_proof.json`.
 
 | Case | Expected `generate_mode` | Expected `generate_error` / stderr |
 |---|---|---|
-| LM Studio stopped | `fail_open` | `lm_studio_unreachable` ; `warning: generate fail-open: lm_studio_unreachable; hits-only` |
+| Generate listener stopped | `fail_open` | `lm_studio_unreachable` ; `path=fail-open-only` |
 | Wrong model | `fail_open` | `wrong_model` |
 | Port closed | `fail_open` | `port_closed` |
 | Unreachable | `fail_open` | `lm_studio_unreachable` |
