@@ -100,6 +100,7 @@ Client library: `scripts/mailroom_generate.py`. Live CLI remains
 `scripts/ask_mail.py`. Headless probes (C/D/E/F):
 `scripts/ask_mail_generate_probes.py`. GET `/ui` is served by
 `--serve` from `scripts/ask_mail_ui.py` (same-origin POST `/ask`).
+Citation chips GET `/message?id=...` (fail-open-only if missing).
 
 ## UI + MCP + generate (three processes)
 

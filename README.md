@@ -34,7 +34,8 @@ Ollama generate/chat **cannot** score Qwen3-Reranker. Practice + traps:
 **[docs/model-runtime-gates.md](docs/model-runtime-gates.md)**.
 
 `scripts/ask_mail.py` is the PR-8 CLI + HTTP `127.0.0.1:8743` (GET /ui
-same-origin POST /ask; 8744 if bound) + MCP (`ask_mail`,
+same-origin POST /ask; GET /message?id=... for citation click-through;
+8744 if bound) + MCP (`ask_mail`,
 `hybrid_search`, `get_thread`, non-sending `draft_reply`). `--serve`
 and `--mcp` both block — two processes. Preferred generate **process** is
 `mlx_lm.server` on `http://127.0.0.1:1234/v1/chat/completions` when

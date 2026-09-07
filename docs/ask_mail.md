@@ -190,6 +190,11 @@ curl -sS http://127.0.0.1:8743/ask \
 ```
 
 ```zsh
+# MBP — citation click-through (existing id only; fail-open-only if missing)
+curl -sS 'http://127.0.0.1:8743/message?id=MESSAGE_ID'
+```
+
+```zsh
 # Mini — MCP stdio (ask_mail, hybrid_search, get_thread, draft_reply)
 # Separate process from --serve: both block.
 MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
@@ -203,8 +208,11 @@ MAILROOM_DB=$HOME/MailArchive/mailroom.sqlite \
 
 `--serve` already binds `127.0.0.1:8743` (8744 if bound). GET `/ui` is a
 same-origin page that POST `/ask`. Citations render as chips and stay
-visible when generate is labeled `fail-open-only`. GET `/` and `/health`
-stay JSON (`ui=/ui`, `generate_process=mlx_lm.server`).
+visible when generate is labeled `fail-open-only`. GET /message reads
+SoR sqlite by `message_id`. Click a citation chip to GET `/message?id=...` (subject / from / date / body from SoR sqlite;
+missing id is labeled **fail-open-only**, body null, never invented).
+GET `/` and `/health` stay JSON (`ui=/ui`, `message=/message`,
+`generate_process=mlx_lm.server`). No Apple Mail URL schemes. No attachment ingest.
 
 `--serve` and `--mcp` both block. Start them as two processes.
 `mlx_lm.server` is a third process (LaunchAgent via
