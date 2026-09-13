@@ -14,7 +14,8 @@ expanduser — no machine home hardcodes).
 
 **Mini** may use a **copy** DB (for example a file copied from the MBP, or a
 local `mailroom-copy`). That is a replica, not a second live writer. Do not
-dual-write over SMB/NFS.
+dual-write over SMB/NFS. One `embed_backfill` writer per `.sqlite`
+(HARD DECK): [embed-backfill.md](embed-backfill.md).
 
 ## Recipes
 
@@ -39,7 +40,10 @@ Apple `/usr/bin/python3` cannot load sqlite-vec. Use the MailArchive venv
 
 ## What it checks
 
-- `PRAGMA integrity_check` — **hard fail** if not `ok`
+- `PRAGMA integrity_check` — **hard fail** if not `ok`. If a working
+  copy is not `ok` (or incremental write raises `sqlite3.DatabaseError`
+  / malformed btree), set it **aside**. Recopy from a known-good source
+  and re-check. Do not merge-back from a malformed file.
 - Counts: `messages`, `message_embeddings` / vec rows, `embedding_meta`,
   coverage gap (messages without embeddings when the schema allows)
 - FTS presence + smoke (`bill`, `Caddell`) — hit counts and top **subjects**

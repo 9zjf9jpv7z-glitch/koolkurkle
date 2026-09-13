@@ -9,6 +9,8 @@ CrossEncoder (fail-open if the optional extra is missing); Ollama
 cannot score Qwen3-Reranker: [rerank.md](rerank.md).
 ask_mail probe: [ask_mail.md](ask_mail.md). Mini-only slim:
 [macos-slim/README.md](../macos-slim/README.md).
+`embed_backfill` single-writer HARD DECK (read this **before** starting
+a backfill): [embed-backfill.md](embed-backfill.md).
 
 These cards are chat/operator steps. They are not the writer-lock file
 `~/MailArchive/ACTION_REQUIRED` (see
@@ -68,6 +70,32 @@ Terminal-only `security` success is not enough. Substitute `__HOME__`,
 bootstrap the same label, and do **not** bootout while rem embed is live —
 use `mailroom-daily-copy.sqlite` then. Full cards:
 [README.mailroom-daily.md](../scripts/README.mailroom-daily.md).
+
+## embed_backfill — one writer per sqlite (HARD DECK)
+
+Read [embed-backfill.md](embed-backfill.md) **before** starting
+`embed_backfill.py`. Preferred practice:
+
+1. **One writer per `.sqlite`.** `--lock` is a per-batch heartbeat. It
+   does not make same-file 2-wide safe.
+2. **Shard on separate files** (copy host `mailroom-copy.sqlite` vs
+   SoR-named `mailroom.sqlite`), then `embed_merge_shards.py` after
+   **both EXIT 0**. Pause the other writer for the merge window only.
+3. **Same-file parallel char-bands are HARD DECK.** Sequential bands on
+   one file, or parallel only on separate files.
+4. **Do not merge-back a malformed working copy.** Set it aside, recopy
+   from a known-good source, then start a writer only after
+   `integrity_check` is `ok`.
+
+```zsh
+# copy host — integrity before a new embed_backfill
+sqlite3 "$HOME/MailArchive/mailroom-copy.sqlite" 'PRAGMA integrity_check;'
+```
+
+```zsh
+# SoR host — integrity before a new embed_backfill
+sqlite3 "$HOME/MailArchive/mailroom.sqlite" 'PRAGMA integrity_check;'
+```
 
 ## Keychain create
 

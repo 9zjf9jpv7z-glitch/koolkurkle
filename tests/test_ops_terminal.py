@@ -16,6 +16,7 @@ HEALTH = ROOT / "docs" / "sor-health.md"
 LOCK = ROOT / "docs" / "pr0" / "with_writer_lock_DESIGN.md"
 GATES = ROOT / "docs" / "model-runtime-gates.md"
 ASK = ROOT / "docs" / "ask_mail.md"
+EMBED = ROOT / "docs" / "embed-backfill.md"
 
 
 class OpsTerminalDocTests(unittest.TestCase):
@@ -74,6 +75,10 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertIn("mailroom_copy_db.py", text)
         self.assertIn("bind_copy_db", text)
         self.assertIn("launchctl start com.mailroom.daily", text)
+        self.assertIn("embed-backfill.md", text)
+        self.assertIn("HARD DECK", text)
+        self.assertIn("same-file 2-wide", text)
+        self.assertIn("embed_merge_shards.py", text)
         self.assertNotIn("/Users/", text)
         self.assertNotIn("-----BEGIN", text)
         self.assertNotIn("ak_live", text)
@@ -82,7 +87,7 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertNotIn("@icloud.com", text)
 
     def test_linked_from_existing_docs(self):
-        for path in (README, DAILY, RERANK, SLIM, HEALTH, LOCK, GATES, ASK):
+        for path in (README, DAILY, RERANK, SLIM, HEALTH, LOCK, GATES, ASK, EMBED):
             text = path.read_text(encoding="utf-8")
             self.assertIn("ops-terminal.md", text, msg=path.name)
 

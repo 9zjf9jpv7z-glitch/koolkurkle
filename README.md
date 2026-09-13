@@ -22,7 +22,10 @@ Human Terminal cards, Keychain create, privacy generics, GitHub SoR
 
 New/daily embed uses `--quote-strip` (MAILROOM §6.1 header-prefixed cleaned
 body). Live rem LaunchAgents keep the old text path until EXIT — do not
-restart the 63k backfill or change rem flags.
+restart the 63k backfill or change rem flags. **HARD DECK:** one
+`embed_backfill` writer per `.sqlite` (`--lock` is per-batch, not
+same-file 2-wide). Read **[docs/embed-backfill.md](docs/embed-backfill.md)**
+before starting a backfill.
 
 ## Hybrid retrieve (MAILROOM §6.2 / PR-6 + PR-7) + ask_mail (PR-8)
 

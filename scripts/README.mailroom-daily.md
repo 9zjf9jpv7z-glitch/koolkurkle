@@ -77,6 +77,12 @@ is hard-fail (`db_mode=refused`), not fail-open.
    **or** stale `content_hash`. Does **not** restart live rem rows (meta
    present, `content_hash` NULL). Writer lock is per batch, not the rem
    job. Live rem LaunchAgents keep the old text path until EXIT.
+   **HARD DECK:** one `embed_backfill` writer per `.sqlite`. `--lock`
+   does not make same-file 2-wide safe. Parallel char-bands belong on
+   separate files (copy vs SoR-named), then `embed_merge_shards.py`
+   after both EXIT 0. Sequential bands on one file. Do not merge-back
+   a malformed working copy. Practice:
+   **[docs/embed-backfill.md](../docs/embed-backfill.md)**.
 5. **ask_mail** is on-demand (CLI / HTTP / MCP) — not part of the nightly
    chain. This job must **not** start LM Studio or load 35B-class generate.
    Generate stays a separate on-demand path. Rerank is CrossEncoder
@@ -308,7 +314,7 @@ Prefer LaunchAgent. If you must use cron on the Mini:
 | | Mini (this job) | MBP |
 |---|---|---|
 | Role | Copy-only daily until PR-5 | Laptop; rem embed may still hold the copy |
-| Scheduler | `com.mailroom.daily` | Do not also run a live writer on the same DB |
+| Scheduler | `com.mailroom.daily` | Do not also run a live writer on the same DB ([embed-backfill.md](../docs/embed-backfill.md)) |
 | Embed Python | `~/MailArchive/.venv/bin/python` | Homebrew `/opt/homebrew/bin/python3` on embed PRs |
 | Headers curl | Apple `/usr/bin/curl` | Same |
 
