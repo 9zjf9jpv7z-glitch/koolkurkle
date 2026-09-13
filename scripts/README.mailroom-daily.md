@@ -23,6 +23,20 @@ Copy-only keeps one writer on the live rem copy and leaves SoR promotion
 to PR-5 (out of scope here). Do not mount the live SQLite over SMB/NFS
 and do not dual-write.
 
+### Daily children use the same copy path
+
+The driver **and** every daily child must open that copy. `mailroom_daily.py`
+passes `--db` and sets `MAILROOM_DB` on headers (`imap_newmail.py`,
+`imap_tombstone.py`), body/FTS, classify, bills, and embed. Children read
+`$MAILROOM_DB` (launchd already sets it) **and** accept `--db`. Resolve
+through `mailroom_copy_db.py` (same allowlist) — do not use a hardcoded
+SoR path (`t.DB` or `~/MailArchive/mailroom.sqlite`).
+
+**Why:** a child that ignores the copy and opens Mini's empty SoR stub
+fails with `no such table: messages` even though the copy has `messages`.
+`embed_backfill.py` already took `--db`; the other Mini-local scripts
+must honor the same path. Do not invent a second daily driver.
+
 If rem embed still holds `mailroom-copy.sqlite`, point the daily job at
 `__HOME__/MailArchive/mailroom-daily-copy.sqlite` instead.
 
@@ -193,6 +207,7 @@ mkdir -p ~/MailArchive/scripts ~/MailArchive/logs ~/Library/LaunchAgents
 ```zsh
 # Mini — copy daily driver scripts
 cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py \
+  scripts/mailroom_copy_db.py \
   ~/MailArchive/scripts/
 ```
 

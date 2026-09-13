@@ -5,7 +5,8 @@ Wires existing MailArchive scripts. Does not reimplement IMAP, FTS, classify,
 or embed. No Python IMAP sockets. No secrets. Copy-only until SoR cutover
 (PR-5): MAILROOM_DB basename must be mailroom-copy.sqlite or
 mailroom-daily-copy.sqlite. Unset / mailroom.sqlite / other names refuse
-before IMAP or embed.
+before IMAP or embed. The plan passes --db and MAILROOM_DB to every
+child so Mini IMAP/classify/bills cannot open the empty SoR stub.
 
 Catch-up: if last_daily_rag_ok is missing or at least 24h old, run the
 chain (resume first failed phase). last_daily_rag_ok is written only after
@@ -32,6 +33,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from mailroom_copy_db import (
+    COPY_DB_BASENAMES,
+    CopyDbRefuse,
+    allowed_copy_db,
+    emit_db_mode,
+    env_db_path,
+    resolve_copy_db,
+)
+
 APPLE_CURL = "/usr/bin/curl"
 APPLE_PY = "/usr/bin/python3"
 DEFAULT_ARCHIVE = Path.home() / "MailArchive"
@@ -40,13 +50,6 @@ IMAP_STAMP = "last_imap_ok"
 BODIES_STAMP = "last_bodies_ok"
 EMBED_STAMP = "last_embed_ok"
 LOCK_NAME = "mailroom.daily.lock"
-COPY_DB_BASENAMES = frozenset(
-    {
-        "mailroom-copy.sqlite",
-        "mailroom-daily-copy.sqlite",
-    }
-)
-ALLOWLIST_HELP = "mailroom-copy.sqlite or mailroom-daily-copy.sqlite"
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 CATCH_UP_MAX_AGE_SEC = 24 * 60 * 60
 # Calendar fire can be a few minutes early vs last night's stamp.
@@ -126,53 +129,17 @@ def default_logs_dir(archive: Path) -> Path:
 
 def default_db_path(archive: Path) -> Path | None:
     """Return MAILROOM_DB if set. Never silently default to mailroom.sqlite."""
-    raw = (os.environ.get("MAILROOM_DB") or "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return None
-
-
-def allowed_copy_db(path: Path) -> bool:
-    return path.name in COPY_DB_BASENAMES
-
-
-def unset_db_message() -> str:
-    return (
-        "MAILROOM_DB is unset. Set an explicit copy path (basename %s). "
-        "Preferred practice: the Mini daily job writes only a copy until "
-        "SoR cutover (PR-5). A silent default to mailroom.sqlite would "
-        "write the SoR name (empty on Mini, or race rem embed)."
-        % ALLOWLIST_HELP
-    )
-
-
-def refuse_copy_db_message(path: Path) -> str:
-    return (
-        "MAILROOM_DB basename %r is not on the copy allowlist (%s). "
-        "Refusing start until SoR cutover (PR-5). No IMAP/embed. "
-        "Use mailroom-copy.sqlite, or mailroom-daily-copy.sqlite when "
-        "rem embed still holds the copy."
-        % (path.name, ALLOWLIST_HELP)
-    )
+    del archive
+    return env_db_path()
 
 
 def resolve_driver_db(cli_db: str | None, archive: Path) -> Path:
     """Hard-fail unless basename is on the copy allowlist. archive unused on purpose."""
     del archive
-    if cli_db:
-        path = Path(cli_db).expanduser()
-    else:
-        path = default_db_path(Path("."))
-        if path is None:
-            raise DailyRefuse(unset_db_message())
-    if not allowed_copy_db(path):
-        raise DailyRefuse(refuse_copy_db_message(path))
-    return path
-
-
-def emit_db_mode(mode: str) -> None:
-    sys.stderr.write("db_mode=%s\n" % mode)
-    sys.stderr.flush()
+    try:
+        return resolve_copy_db(cli_db)
+    except CopyDbRefuse as exc:
+        raise DailyRefuse(str(exc)) from exc
 
 
 def default_lock_path(archive: Path) -> Path:
@@ -440,10 +407,12 @@ def build_plan(
         else:
             note = "CURL_BIN inherited"
         extra = list(step.extra_args)
+        extra.extend(("--db", str(db)))
+        extra_env["MAILROOM_DB"] = str(db)
         if step.name == "embed":
-            extra.extend(("--db", str(db)))
             extra.extend(extra_embed_args)
             note = "%s; python=%s (sqlite-vec)" % (note, py)
+        note = "%s; MAILROOM_DB=%s --db (same copy as driver)" % (note, db)
         for script in found:
             argv = [str(py), str(script), *extra]
             items.append(

@@ -8,7 +8,9 @@ LaunchAgent `com.mailroom.daily` on **mac-mini.local** (set your macOS login) ru
 local IMAP → FTS → classify/bills → incremental embed chain. No Grok Bot at
 runtime. **Copy-only until PR-5:** set `MAILROOM_DB` to
 `mailroom-copy.sqlite` or `mailroom-daily-copy.sqlite`. Unset /
-`mailroom.sqlite` is refused (hard-fail). One writer, no SMB/NFS dual-write.
+`mailroom.sqlite` is refused (hard-fail). Daily children get `--db` and
+`$MAILROOM_DB` so they open that copy, not Mini's empty SoR stub. One
+writer, no SMB/NFS dual-write.
 
 Install, Keychain **name** (`mailroom.imap.app-password`), launchd Keychain
 proof, Mini copy-only notes (`$HOME` only), and phase watermarks:

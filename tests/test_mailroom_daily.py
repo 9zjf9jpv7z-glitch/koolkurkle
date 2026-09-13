@@ -19,6 +19,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import mailroom_copy_db as copy_db  # noqa: E402
 import mailroom_daily as daily  # noqa: E402
 
 
@@ -100,7 +101,7 @@ class PlanTests(unittest.TestCase):
             venv_py = archive / ".venv" / "bin" / "python"
             venv_py.parent.mkdir(parents=True)
             _write_executable(venv_py, "#!/usr/bin/env python3\n")
-            db = archive / "mailroom.sqlite"
+            db = archive / "mailroom-copy.sqlite"
             with patch.dict(os.environ, {"MAILROOM_VENV_PY": str(venv_py)}, clear=False):
                 items = daily.build_plan(archive, scripts, db)
         names = [(i.step, i.script.name) for i in items]
@@ -120,8 +121,12 @@ class PlanTests(unittest.TestCase):
         body = [i for i in items if i.step == "bodies-fts"][0]
         self.assertIn("CURL_BIN", body.unset_env)
         embed = items[-1]
-        self.assertIn("--db", embed.argv)
-        self.assertIn(str(db), embed.argv)
+        for item in items:
+            self.assertIn("--db", item.argv, msg=item.script.name)
+            db_idx = item.argv.index("--db")
+            self.assertEqual(item.argv[db_idx + 1], str(db), msg=item.script.name)
+            self.assertEqual(item.extra_env.get("MAILROOM_DB"), str(db), msg=item.script.name)
+            self.assertNotIn("mailroom.sqlite", item.argv)
         self.assertIn("--skip-auth", embed.argv)
         self.assertIn("--quote-strip", embed.argv)
         self.assertIn("--lock", embed.argv)
@@ -137,7 +142,7 @@ class PlanTests(unittest.TestCase):
             venv_py = archive / "venvpy"
             _write_executable(venv_py, "#!/usr/bin/env python3\n")
             with patch.dict(os.environ, {"MAILROOM_VENV_PY": str(venv_py)}, clear=False):
-                items = daily.build_plan(archive, scripts, archive / "mailroom.sqlite")
+                items = daily.build_plan(archive, scripts, archive / "mailroom-copy.sqlite")
         body = [i for i in items if i.step == "bodies-fts"]
         self.assertEqual(len(body), 1)
         self.assertEqual(body[0].script.name, "imap_fetch_bodies_fts.py")
@@ -464,6 +469,186 @@ class CopyDbGuardTests(unittest.TestCase):
         self.assertNotIn("fail_open", src)
 
 
+CHILD_PROBE = r"""#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.environ.get("MAILROOM_COPY_DB_DIR", str(Path(__file__).resolve().parent)))
+import mailroom_copy_db as cdb
+
+path = cdb.resolve_from_argv(sys.argv[1:])
+log = os.environ.get("MAILROOM_CHILD_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(
+            "script=%s opened_db=%s argv_has_db=%s env=%s\n"
+            % (
+                Path(sys.argv[0]).name,
+                path,
+                "--db" in sys.argv,
+                os.environ.get("MAILROOM_DB", ""),
+            )
+        )
+print("opened_db=%s" % path)
+sys.exit(0)
+"""
+
+
+class ChildDbHonorTests(unittest.TestCase):
+    """Children honor --db / MAILROOM_DB. No live IMAP."""
+
+    def _touch_probe_scripts(self, folder: Path, helper_dir: Path) -> Path:
+        log = folder.parent / "child.log"
+        for name in (
+            "imap_newmail.py",
+            "imap_tombstone.py",
+            "imap_fetch_bodies_fts.py",
+            "classify.py",
+            "notify_bills.py",
+            "embed_backfill.py",
+        ):
+            _write_executable(folder / name, CHILD_PROBE)
+        return log
+
+    def test_negative_smoke_fails_if_child_would_open_sor_when_copy(self):
+        """FAIL if a daily child would open mailroom.sqlite while MAILROOM_DB is a copy."""
+        src = inspect.getsource(daily.build_plan)
+        self.assertIn('extra.extend(("--db", str(db)))', src)
+        self.assertIn('extra_env["MAILROOM_DB"] = str(db)', src)
+        embed_only = src.find('if step.name == "embed"')
+        db_wire = src.find('extra.extend(("--db", str(db)))')
+        self.assertGreater(embed_only, 0)
+        self.assertLess(
+            db_wire,
+            embed_only,
+            msg="--db must be wired for every daily child, not only embed",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "MailArchive"
+            scripts = archive / "scripts"
+            scripts.mkdir(parents=True)
+            for name in (
+                "imap_newmail.py",
+                "imap_tombstone.py",
+                "imap_fetch_bodies_fts.py",
+                "classify.py",
+                "notify_bills.py",
+                "embed_backfill.py",
+            ):
+                (scripts / name).write_text("# fake\n", encoding="utf-8")
+            venv_py = archive / ".venv" / "bin" / "python"
+            venv_py.parent.mkdir(parents=True)
+            _write_executable(venv_py, "#!/usr/bin/env python3\n")
+            copy = archive / "mailroom-copy.sqlite"
+            with patch.dict(os.environ, {"MAILROOM_VENV_PY": str(venv_py)}, clear=False):
+                items = daily.build_plan(archive, scripts, copy)
+        self.assertTrue(items)
+        for item in items:
+            self.assertFalse(
+                copy_db.child_would_open_sor(item.argv, item.extra_env),
+                msg="%s would open SoR when MAILROOM_DB is a copy" % item.script.name,
+            )
+            self.assertIn("--db", item.argv)
+            self.assertEqual(item.argv[item.argv.index("--db") + 1], str(copy))
+            self.assertEqual(item.extra_env.get("MAILROOM_DB"), str(copy))
+            self.assertNotIn("mailroom.sqlite", item.argv)
+            self.assertNotEqual(Path(item.extra_env["MAILROOM_DB"]).name, "mailroom.sqlite")
+        self.assertTrue(
+            copy_db.child_would_open_sor([], {}),
+            msg="unset child path must be treated as SoR-open / refuse",
+        )
+        self.assertTrue(
+            copy_db.child_would_open_sor(
+                ["--db", "/tmp/mailroom.sqlite"],
+                {"MAILROOM_DB": str(copy)},
+            )
+        )
+
+    def test_interface_proof_copy_db_reaches_child_argv_and_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "MailArchive"
+            scripts = archive / "scripts"
+            logs = archive / "logs"
+            scripts.mkdir(parents=True)
+            logs.mkdir()
+            venv_py = archive / ".venv" / "bin" / "python"
+            venv_py.parent.mkdir(parents=True)
+            _write_executable(
+                venv_py,
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                "os.execv(sys.executable, [sys.executable] + sys.argv[1:])\n",
+            )
+            child_log = self._touch_probe_scripts(scripts, SCRIPTS)
+            copy = archive / "mailroom-copy.sqlite"
+            env = {
+                "MAILROOM_VENV_PY": str(venv_py),
+                "MAILROOM_APPLE_PY": sys.executable,
+                "MAILROOM_COPY_DB_DIR": str(SCRIPTS),
+                "MAILROOM_CHILD_LOG": str(child_log),
+                "MAILROOM_DB": str(copy),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(daily, "check_embed_health"):
+                    rc = daily.main(
+                        [
+                            "--archive",
+                            str(archive),
+                            "--scripts",
+                            str(scripts),
+                            "--logs",
+                            str(logs),
+                            "--db",
+                            str(copy),
+                            "--force",
+                        ]
+                    )
+            self.assertEqual(rc, 0)
+            text = child_log.read_text(encoding="utf-8")
+            for name in (
+                "imap_newmail.py",
+                "imap_tombstone.py",
+                "imap_fetch_bodies_fts.py",
+                "classify.py",
+                "notify_bills.py",
+                "embed_backfill.py",
+            ):
+                self.assertIn("script=%s" % name, text)
+                self.assertIn("opened_db=%s" % copy, text)
+            self.assertIn("argv_has_db=True", text)
+            self.assertIn("env=%s" % copy, text)
+            self.assertNotIn("mailroom.sqlite", text)
+
+    def test_interface_proof_helper_refuses_sor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "mailroom_copy_db.py"), "--db", str(db)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("db_mode=refused", proc.stderr)
+        self.assertIn("mailroom.sqlite", proc.stderr)
+        self.assertNotIn("db_mode=copy", proc.stderr)
+
+    def test_interface_proof_helper_accepts_copy_and_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom-daily-copy.sqlite"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "mailroom_copy_db.py")],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "MAILROOM_DB": str(db)},
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("db_mode=copy", proc.stderr)
+        self.assertIn(str(db), proc.stdout)
+
+
 class FlockTests(unittest.TestCase):
     def test_acquire_and_second_holder_refuses(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -541,6 +726,7 @@ class SourceHygieneTests(unittest.TestCase):
         files = [
             ROOT / "scripts" / "mailroom_daily.py",
             ROOT / "scripts" / "run_mailroom_daily.sh",
+            ROOT / "scripts" / "mailroom_copy_db.py",
             ROOT / "scripts" / "ask_mail.py",
             ROOT / "scripts" / "README.mailroom-daily.md",
             ROOT / "launchd" / "com.mailroom.daily.plist",
