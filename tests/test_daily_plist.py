@@ -30,7 +30,8 @@ class PlistTests(unittest.TestCase):
         self.assertFalse(self.data["KeepAlive"])
         interval = self.data["StartCalendarInterval"]
         self.assertEqual(interval["Hour"], 20)
-        self.assertEqual(interval["Minute"], 0)
+        self.assertEqual(interval["Minute"], 5)
+        self.assertEqual(self.data["Nice"], 5)
 
     def test_env_and_logs(self):
         env = self.data["EnvironmentVariables"]
@@ -39,7 +40,10 @@ class PlistTests(unittest.TestCase):
         self.assertIn("/opt/homebrew/bin", env["PATH"])
         self.assertEqual(env["MAILROOM_KEYCHAIN_ITEM"], "mailroom.imap.app-password")
         self.assertNotIn("mailroom.icloud.app-password", env["MAILROOM_KEYCHAIN_ITEM"])
+        self.assertEqual(env["MAILROOM_DB"], "__HOME__/MailArchive/mailroom-copy.sqlite")
+        self.assertEqual(env["OLLAMA_HOST"], "http://127.0.0.1:11434")
         self.assertEqual(env["MAILARCHIVE"], "__HOME__/MailArchive")
+        self.assertNotIn("mailroom.sqlite", env["MAILROOM_DB"].rsplit("/", 1)[-1])
         self.assertEqual(self.data["WorkingDirectory"], "__HOME__/MailArchive")
         self.assertTrue(self.data["StandardOutPath"].endswith("logs/daily_rag.stdout.log"))
         self.assertTrue(self.data["StandardErrorPath"].endswith("logs/daily_rag.stderr.log"))
@@ -72,10 +76,16 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("~/MailArchive/.venv/bin/python", text)
         self.assertIn("cannot load sqlite-vec", text)
         self.assertIn("SMB/NFS", text)
-        self.assertIn("Promote Mini to SoR", text)
+        self.assertIn("copy-only", text)
+        self.assertIn("mailroom-copy.sqlite", text)
+        self.assertIn("mailroom-daily-copy.sqlite", text)
+        self.assertIn("SoR cutover is PR-5", text)
+        self.assertIn("Do **not** `launchctl bootout`", text)
+        self.assertIn("launchctl start com.mailroom.daily", text)
         self.assertIn("cron", text)
         self.assertIn("s|__HOME__|$HOME|g", text)
         self.assertIn("$HOME/MailArchive/scripts/run_mailroom_daily.sh", text)
+        self.assertNotIn("com.baconhill.mailroom-daily", text)
         self.assertNotIn("EXAMPLE_USER_LOCAL", text)
         self.assertNotIn("@example.invalid", text)
         self.assertNotIn("/Users/USERNAME", text)

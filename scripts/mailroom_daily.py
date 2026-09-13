@@ -2,11 +2,15 @@
 """Mini daily RAG orchestrator: IMAP headers → FTS → classify/bills → embed.
 
 Wires existing MailArchive scripts. Does not reimplement IMAP, FTS, classify,
-or embed. No Python IMAP sockets. No secrets.
+or embed. No Python IMAP sockets. No secrets. Copy-only until SoR cutover
+(PR-5): MAILROOM_DB basename must be mailroom-copy.sqlite or
+mailroom-daily-copy.sqlite. Unset / mailroom.sqlite / other names refuse
+before IMAP or embed.
 
-Catch-up: if ~/MailArchive/logs/last_daily_rag_ok is missing or at least 24h
-old, run the chain; else exit 0 quietly. Stamp is written only after every
-step returns 0.
+Catch-up: if last_daily_rag_ok is missing or at least 24h old, run the
+chain (resume first failed phase). last_daily_rag_ok is written only after
+imap + bodies + embed succeed (classify/bills may warn). Exclusive flock
+on mailroom.daily.lock so calendar + RunAtLoad do not double-run.
 
   /usr/bin/python3 mailroom_daily.py --print-plan
   /usr/bin/python3 mailroom_daily.py --skip-if-fresh
@@ -16,11 +20,14 @@ step returns 0.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,9 +36,28 @@ APPLE_CURL = "/usr/bin/curl"
 APPLE_PY = "/usr/bin/python3"
 DEFAULT_ARCHIVE = Path.home() / "MailArchive"
 STAMP_NAME = "last_daily_rag_ok"
+IMAP_STAMP = "last_imap_ok"
+BODIES_STAMP = "last_bodies_ok"
+EMBED_STAMP = "last_embed_ok"
+LOCK_NAME = "mailroom.daily.lock"
+COPY_DB_BASENAMES = frozenset(
+    {
+        "mailroom-copy.sqlite",
+        "mailroom-daily-copy.sqlite",
+    }
+)
+ALLOWLIST_HELP = "mailroom-copy.sqlite or mailroom-daily-copy.sqlite"
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 CATCH_UP_MAX_AGE_SEC = 24 * 60 * 60
 # Calendar fire can be a few minutes early vs last night's stamp.
 CATCH_UP_SLOP_SEC = 15 * 60
+STEP_WATERMARK = {
+    "headers": IMAP_STAMP,
+    "bodies-fts": BODIES_STAMP,
+    "embed": EMBED_STAMP,
+}
+WARN_STEPS = frozenset({"classify", "bills"})
+REQUIRED_STAMPS = (IMAP_STAMP, BODIES_STAMP, EMBED_STAMP)
 
 HEADER_SCRIPTS = ("imap_newmail.py", "imap_tombstone.py")
 BODY_SCRIPTS = ("imap_fetch_bodies_fts.py", "imap_fetch_bodies.py")
@@ -42,6 +68,14 @@ EMBED_SCRIPT = "embed_backfill.py"
 
 class DailyError(RuntimeError):
     """Orchestrator failure (never includes secrets)."""
+
+
+class DailyRefuse(DailyError):
+    """Hard refuse (db_mode=refused). No IMAP/embed."""
+
+
+class DailyLockHeld(DailyError):
+    """Another daily start holds mailroom.daily.lock."""
 
 
 @dataclass(frozen=True)
@@ -65,6 +99,12 @@ class PlanItem:
     unset_env: tuple[str, ...] = ()
 
 
+@dataclass
+class HeldDailyLock:
+    fd: object
+    path: Path
+
+
 def default_archive() -> Path:
     raw = os.environ.get("MAILARCHIVE")
     return Path(raw).expanduser() if raw else DEFAULT_ARCHIVE
@@ -84,15 +124,119 @@ def default_logs_dir(archive: Path) -> Path:
     return archive / "logs"
 
 
-def default_db_path(archive: Path) -> Path:
-    raw = os.environ.get("MAILROOM_DB")
+def default_db_path(archive: Path) -> Path | None:
+    """Return MAILROOM_DB if set. Never silently default to mailroom.sqlite."""
+    raw = (os.environ.get("MAILROOM_DB") or "").strip()
     if raw:
         return Path(raw).expanduser()
-    return archive / "mailroom.sqlite"
+    return None
 
 
-def stamp_path(logs_dir: Path) -> Path:
-    return logs_dir / STAMP_NAME
+def allowed_copy_db(path: Path) -> bool:
+    return path.name in COPY_DB_BASENAMES
+
+
+def unset_db_message() -> str:
+    return (
+        "MAILROOM_DB is unset. Set an explicit copy path (basename %s). "
+        "Preferred practice: the Mini daily job writes only a copy until "
+        "SoR cutover (PR-5). A silent default to mailroom.sqlite would "
+        "write the SoR name (empty on Mini, or race rem embed)."
+        % ALLOWLIST_HELP
+    )
+
+
+def refuse_copy_db_message(path: Path) -> str:
+    return (
+        "MAILROOM_DB basename %r is not on the copy allowlist (%s). "
+        "Refusing start until SoR cutover (PR-5). No IMAP/embed. "
+        "Use mailroom-copy.sqlite, or mailroom-daily-copy.sqlite when "
+        "rem embed still holds the copy."
+        % (path.name, ALLOWLIST_HELP)
+    )
+
+
+def resolve_driver_db(cli_db: str | None, archive: Path) -> Path:
+    """Hard-fail unless basename is on the copy allowlist. archive unused on purpose."""
+    del archive
+    if cli_db:
+        path = Path(cli_db).expanduser()
+    else:
+        path = default_db_path(Path("."))
+        if path is None:
+            raise DailyRefuse(unset_db_message())
+    if not allowed_copy_db(path):
+        raise DailyRefuse(refuse_copy_db_message(path))
+    return path
+
+
+def emit_db_mode(mode: str) -> None:
+    sys.stderr.write("db_mode=%s\n" % mode)
+    sys.stderr.flush()
+
+
+def default_lock_path(archive: Path) -> Path:
+    raw = (os.environ.get("MAILROOM_DAILY_LOCK") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return archive / LOCK_NAME
+
+
+def acquire_daily_lock(path: Path) -> "HeldDailyLock":
+    """Exclusive non-blocking flock. Calendar + RunAtLoad must not double-run."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        fh.close()
+        raise DailyLockHeld(
+            "mailroom.daily.lock held; skipping this start "
+            "(calendar + RunAtLoad must not double-run): %s" % path
+        ) from exc
+    return HeldDailyLock(fd=fh, path=path)
+
+
+def release_daily_lock(held: "HeldDailyLock") -> None:
+    try:
+        fcntl.flock(held.fd.fileno(), fcntl.LOCK_UN)
+    finally:
+        held.fd.close()
+
+
+def ollama_host() -> str:
+    return (os.environ.get("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST).rstrip("/")
+
+
+def embed_health_url() -> str:
+    return ollama_host() + "/api/tags"
+
+
+def check_embed_health(timeout: float = 5.0) -> None:
+    """GET local Ollama /api/tags before incremental embed. Embed-only."""
+    url = embed_health_url()
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", 200)
+            if not (200 <= int(status) < 300):
+                raise DailyError(
+                    "embed health-check failed: GET %s -> %s. "
+                    "Local Ollama (qwen3-embedding:8b) is required."
+                    % (url, status)
+                )
+    except DailyError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise DailyError(
+            "embed health-check failed: GET %s (%s). "
+            "Local Ollama on 127.0.0.1:11434 is required."
+            % (url, exc.__class__.__name__)
+        ) from exc
+
+
+def stamp_path(logs_dir: Path, name: str = STAMP_NAME) -> Path:
+    return logs_dir / name
 
 
 def stamp_age_seconds(path: Path, now: float | None = None) -> float | None:
@@ -123,12 +267,40 @@ def should_run_pipeline(
 
 
 def write_ok_stamp(path: Path, now: float | None = None) -> None:
+    """Atomic stamp: write temp then replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     ts = time.time() if now is None else now
     when = datetime.fromtimestamp(ts, tz=timezone.utc)
     payload = when.strftime("%Y-%m-%dT%H:%M:%SZ") + "\n"
-    path.write_text(payload, encoding="utf-8")
-    os.utime(path, (ts, ts))
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.utime(tmp, (ts, ts))
+    tmp.replace(path)
+
+
+def phase_done_this_cycle(
+    phase_stamp: Path,
+    daily_stamp: Path,
+    now: float | None = None,
+) -> bool:
+    """True when this phase already succeeded in the current catch-up cycle.
+
+    Fresh phase stamp (within 24h-slop) that is newer than last_daily_rag_ok
+    (or exists when the daily stamp is missing) means resume: do not redo it.
+    Stale leftover stamps from the last full success are redone.
+    """
+    if not phase_stamp.is_file():
+        return False
+    now_ts = time.time() if now is None else now
+    age = stamp_age_seconds(phase_stamp, now=now_ts)
+    if age is None:
+        return False
+    threshold = max(0, CATCH_UP_MAX_AGE_SEC - CATCH_UP_SLOP_SEC)
+    if age >= threshold:
+        return False
+    if not daily_stamp.is_file():
+        return True
+    return phase_stamp.stat().st_mtime > daily_stamp.stat().st_mtime
 
 
 def apple_python() -> Path:
@@ -339,8 +511,10 @@ def run_step(item: PlanItem, dry_run: bool, log) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Mini daily RAG: headers (Apple curl) → body/FTS → classify → "
-            "bills → incremental embed. Stamp last_daily_rag_ok only on EXIT 0."
+            "Mini daily RAG (copy-only): headers (Apple curl) → body/FTS → "
+            "classify → bills → incremental embed. MAILROOM_DB basename must "
+            "be mailroom-copy.sqlite or mailroom-daily-copy.sqlite. Stamp "
+            "last_daily_rag_ok only after imap+bodies+embed succeed."
         )
     )
     parser.add_argument(
@@ -361,7 +535,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         default=None,
-        help="Driver DB (default: $MAILROOM_DB or <archive>/mailroom.sqlite).",
+        help=(
+            "Driver DB (required: $MAILROOM_DB or --db). Basename allowlist: "
+            "mailroom-copy.sqlite, mailroom-daily-copy.sqlite. Unset / "
+            "mailroom.sqlite refused until SoR cutover."
+        ),
     )
     parser.add_argument(
         "--skip-if-fresh",
@@ -407,8 +585,6 @@ def main(argv: list[str] | None = None) -> int:
         else default_scripts_dir(archive)
     )
     logs_dir = Path(args.logs).expanduser() if args.logs else default_logs_dir(archive)
-    db = Path(args.db).expanduser() if args.db else default_db_path(archive)
-    stamp = stamp_path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     def log(msg: str) -> None:
@@ -422,6 +598,31 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             pass
 
+    try:
+        db = resolve_driver_db(args.db, archive)
+    except DailyRefuse as exc:
+        emit_db_mode("refused")
+        sys.stderr.write("error: %s\n" % exc)
+        return 2
+    emit_db_mode("copy")
+
+    stamp = stamp_path(logs_dir)
+    held: HeldDailyLock | None = None
+    if not args.print_plan:
+        try:
+            held = acquire_daily_lock(default_lock_path(archive))
+        except DailyLockHeld as exc:
+            log("skip: %s" % exc)
+            return 0
+
+    try:
+        return _run_after_guard(args, archive, scripts_dir, logs_dir, db, stamp, log)
+    finally:
+        if held is not None:
+            release_daily_lock(held)
+
+
+def _run_after_guard(args, archive, scripts_dir, logs_dir, db, stamp, log) -> int:
     force = bool(args.force or not args.skip_if_fresh)
     if not force and not args.print_plan and not args.dry_run:
         if not should_run_pipeline(stamp):
@@ -443,17 +644,72 @@ def main(argv: list[str] | None = None) -> int:
 
     log("mailroom daily start archive=%s db=%s" % (archive, db))
     log("stamp=%s" % stamp)
-    for item in items:
-        rc = run_step(item, dry_run=args.dry_run, log=log)
-        if rc != 0:
-            log("chain aborted; not writing %s" % STAMP_NAME)
-            return rc
+    imap_stamp = stamp_path(logs_dir, IMAP_STAMP)
+    bodies_stamp = stamp_path(logs_dir, BODIES_STAMP)
+    embed_stamp = stamp_path(logs_dir, EMBED_STAMP)
+    done = {
+        IMAP_STAMP: phase_done_this_cycle(imap_stamp, stamp),
+        BODIES_STAMP: phase_done_this_cycle(bodies_stamp, stamp),
+        EMBED_STAMP: phase_done_this_cycle(embed_stamp, stamp),
+    }
+
+    i = 0
+    while i < len(items):
+        step = items[i].step
+        group = []
+        while i < len(items) and items[i].step == step:
+            group.append(items[i])
+            i += 1
+        watermark = STEP_WATERMARK.get(step)
+        warn_only = step in WARN_STEPS
+        if watermark and done.get(watermark):
+            log("skip %s (watermark %s)" % (step, watermark))
+            continue
+        if (
+            warn_only
+            and done[IMAP_STAMP]
+            and done[BODIES_STAMP]
+            and done[EMBED_STAMP]
+        ):
+            log("skip %s (required watermarks already set)" % step)
+            continue
+        if step == "embed" and not args.dry_run:
+            try:
+                check_embed_health()
+            except DailyError as exc:
+                log("error: %s" % exc)
+                log("chain aborted; not writing %s" % STAMP_NAME)
+                return 2
+        step_rc = 0
+        for item in group:
+            rc = run_step(item, dry_run=args.dry_run, log=log)
+            if rc != 0:
+                step_rc = rc
+                if warn_only:
+                    log(
+                        "warning: %s exited %s (classify may warn; continuing)"
+                        % (item.step, rc)
+                    )
+                    continue
+                log("chain aborted; not writing %s" % STAMP_NAME)
+                return rc
+        if args.dry_run:
+            continue
+        if watermark and step_rc == 0:
+            dest = stamp_path(logs_dir, watermark)
+            write_ok_stamp(dest)
+            done[watermark] = True
+            log("wrote %s" % dest)
+
     if args.dry_run:
         log("dry-run complete; stamp not written")
         return 0
-    write_ok_stamp(stamp)
-    log("wrote %s" % stamp)
-    return 0
+    if all(done[name] for name in REQUIRED_STAMPS):
+        write_ok_stamp(stamp)
+        log("wrote %s" % stamp)
+        return 0
+    log("required phases incomplete; not writing %s" % STAMP_NAME)
+    return 2
 
 
 if __name__ == "__main__":

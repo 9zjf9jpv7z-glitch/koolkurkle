@@ -22,6 +22,31 @@ export PYTHONUNBUFFERED=1
 export MAILARCHIVE
 export MAILARCHIVE_SCRIPTS="$SCRIPTS"
 export MAILARCHIVE_LOGS="$LOGS"
+export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+
+# Copy-only until SoR cutover (PR-5). Refuse unset / SoR / unknown
+# basenames before Keychain or IMAP. Preferred practice: explicit copy
+# path so the job cannot write mailroom.sqlite (empty Mini SoR, or race
+# rem embed). Use mailroom-daily-copy.sqlite when rem still holds the copy.
+_db="${MAILROOM_DB:-}"
+if [ -z "$_db" ]; then
+  echo "error: MAILROOM_DB is unset. Set an explicit copy path (basename mailroom-copy.sqlite or mailroom-daily-copy.sqlite). Preferred practice: the Mini daily job writes only a copy until SoR cutover (PR-5). A silent default to mailroom.sqlite would write the SoR name." >&2
+  echo "db_mode=refused" >&2
+  exit 2
+fi
+_base="${_db##*/}"
+_base="${_base%/}"
+case "$_base" in
+  mailroom-copy.sqlite|mailroom-daily-copy.sqlite)
+    echo "db_mode=copy" >&2
+    ;;
+  *)
+    echo "error: MAILROOM_DB basename '${_base}' is not on the copy allowlist (mailroom-copy.sqlite, mailroom-daily-copy.sqlite). Refusing start until SoR cutover (PR-5). No IMAP/embed." >&2
+    echo "db_mode=refused" >&2
+    exit 2
+    ;;
+esac
+unset _db _base
 
 # Load IMAP app password from Keychain by service name only.
 # Override the item with MAILROOM_KEYCHAIN_ITEM. Do not print the value.
@@ -73,4 +98,6 @@ fi
 
 # Fresh stamp → mailroom_daily.py exits 0 with no output (RunAtLoad catch-up).
 # Step lines go to stderr (LaunchAgent StandardErrorPath) and the dated log.
+# Exclusive flock on mailroom.daily.lock is taken inside mailroom_daily.py so
+# StartCalendarInterval + RunAtLoad cannot double-run.
 exec "$APPLE_PY" "$DAILY_PY" --skip-if-fresh "$@"
