@@ -9,7 +9,8 @@ local IMAP → FTS → classify/bills → incremental embed chain. No Grok Bot a
 runtime. **Copy-only until PR-5:** set `MAILROOM_DB` to
 `mailroom-copy.sqlite` or `mailroom-daily-copy.sqlite`. Unset /
 `mailroom.sqlite` is refused (hard-fail). Daily children get `--db` and
-`$MAILROOM_DB` so they open that copy, not Mini's empty SoR stub. One
+`$MAILROOM_DB` and honor them through `bind_copy_db()` (`argv=None` means
+`sys.argv[1:]`) so they open that copy, not Mini's empty SoR stub. One
 writer, no SMB/NFS dual-write.
 
 Install, Keychain **name** (`mailroom.imap.app-password`), launchd Keychain

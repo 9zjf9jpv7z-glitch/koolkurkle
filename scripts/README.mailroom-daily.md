@@ -29,13 +29,24 @@ The driver **and** every daily child must open that copy. `mailroom_daily.py`
 passes `--db` and sets `MAILROOM_DB` on headers (`imap_newmail.py`,
 `imap_tombstone.py`), body/FTS, classify, bills, and embed. Children read
 `$MAILROOM_DB` (launchd already sets it) **and** accept `--db`. Resolve
-through `mailroom_copy_db.py` (same allowlist) — do not use a hardcoded
-SoR path (`t.DB` or `~/MailArchive/mailroom.sqlite`).
+through `mailroom_copy_db.bind_copy_db()` (same allowlist) — do not use a
+hardcoded SoR path (`t.DB` or `~/MailArchive/mailroom.sqlite`).
+
+**PR-36 / child MAILROOM_DB lesson:** driver copy-only is not enough if a
+child ignores `--db` / `$MAILROOM_DB`. `bind_copy_db()` / `parse_db_cli()`
+must read `sys.argv[1:]` when `argv` is `None`. Treating `None` like `[]`
+drops process `--db` and the child can still open Mini's empty SoR stub.
+GitHub children (`scripts/imap_newmail.py`, `imap_tombstone.py`,
+`imap_fetch_bodies_fts.py`, `classify.py`, `notify_bills.py`) honor that
+bind and refuse `mailroom.sqlite` / unset (fail closed). They do not open
+IMAP or Keychain. Mini-local live IMAP/classify/bills should call the same
+`bind_copy_db()` before any sqlite write — merge the bind; do not replace
+a live Mini body with the GitHub bind-only contract.
 
 **Why:** a child that ignores the copy and opens Mini's empty SoR stub
 fails with `no such table: messages` even though the copy has `messages`.
-`embed_backfill.py` already took `--db`; the other Mini-local scripts
-must honor the same path. Do not invent a second daily driver.
+`embed_backfill.py` already took `--db`; the other daily children must
+honor the same path. Do not invent a second daily driver.
 
 If rem embed still holds `mailroom-copy.sqlite`, point the daily job at
 `__HOME__/MailArchive/mailroom-daily-copy.sqlite` instead.
@@ -205,10 +216,17 @@ mkdir -p ~/MailArchive/scripts ~/MailArchive/logs ~/Library/LaunchAgents
 ```
 
 ```zsh
-# Mini — copy daily driver scripts
+# Mini — copy daily driver + copy-db helper (bind_copy_db)
 cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py \
   scripts/mailroom_copy_db.py \
   ~/MailArchive/scripts/
+```
+
+```zsh
+# Mini — merge bind_copy_db into live IMAP/classify/bills (do not
+# overwrite a live Mini body with the GitHub bind-only contract)
+# from mailroom_copy_db import bind_copy_db
+# db = bind_copy_db()  # argv=None → sys.argv[1:]; honors --db
 ```
 
 ```zsh

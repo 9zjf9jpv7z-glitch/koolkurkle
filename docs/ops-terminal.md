@@ -58,8 +58,10 @@ Preferred practice: the Mini daily job writes **only** a copy. Set
 (`db_mode=refused`) until SoR cutover (PR-5). Why: Mini SoR may be empty
 and rem embed may still hold the copy — a silent default would write the
 wrong file. Daily children must use that same copy (`--db` and
-`$MAILROOM_DB`, via `mailroom_copy_db.py`) so IMAP/classify/bills do not
-open the empty SoR stub.
+`$MAILROOM_DB`, via `mailroom_copy_db.py` `bind_copy_db`) so
+IMAP/classify/bills do not open the empty SoR stub. `bind_copy_db()`
+reads `sys.argv[1:]` when `argv` is `None` — otherwise process `--db`
+is ignored.
 
 Keychain must unlock from **launchd** (`launchctl start com.mailroom.daily`).
 Terminal-only `security` success is not enough. Substitute `__HOME__`,

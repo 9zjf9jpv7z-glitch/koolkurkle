@@ -155,8 +155,10 @@ class PlanTests(unittest.TestCase):
             venv_py = archive / "venvpy"
             _write_executable(venv_py, "#!/usr/bin/env python3\n")
             with patch.dict(os.environ, {"MAILROOM_VENV_PY": str(venv_py)}, clear=False):
-                with self.assertRaises(daily.DailyError) as ctx:
-                    daily.build_plan(archive, scripts, archive / "db.sqlite")
+                # Isolate from repo/scripts children landed in PR-36.
+                with patch.object(daily, "search_roots", return_value=[scripts]):
+                    with self.assertRaises(daily.DailyError) as ctx:
+                        daily.build_plan(archive, scripts, archive / "db.sqlite")
         self.assertIn("missing required", str(ctx.exception))
 
 
@@ -727,6 +729,11 @@ class SourceHygieneTests(unittest.TestCase):
             ROOT / "scripts" / "mailroom_daily.py",
             ROOT / "scripts" / "run_mailroom_daily.sh",
             ROOT / "scripts" / "mailroom_copy_db.py",
+            ROOT / "scripts" / "imap_newmail.py",
+            ROOT / "scripts" / "imap_tombstone.py",
+            ROOT / "scripts" / "imap_fetch_bodies_fts.py",
+            ROOT / "scripts" / "classify.py",
+            ROOT / "scripts" / "notify_bills.py",
             ROOT / "scripts" / "ask_mail.py",
             ROOT / "scripts" / "README.mailroom-daily.md",
             ROOT / "launchd" / "com.mailroom.daily.plist",
