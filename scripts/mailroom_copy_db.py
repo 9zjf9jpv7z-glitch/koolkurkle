@@ -6,11 +6,13 @@ Refuse mailroom.sqlite / unset until SoR cutover (PR-5). Hard-fail,
 not fail-open. No silent default to the SoR name.
 
 Daily children (imap_newmail, imap_tombstone, imap_fetch_bodies_fts /
-imap_fetch_bodies, classify, notify_bills) should resolve the DB through
-this module instead of a hardcoded SoR path (t.DB or
-~/MailArchive/mailroom.sqlite). embed_backfill.py already accepts --db;
-the orchestrator still passes --db and MAILROOM_DB so every child opens
-the same copy as the driver.
+imap_fetch_bodies, classify, notify_bills) resolve the DB through
+bind_copy_db() / resolve_from_argv() instead of a hardcoded SoR path
+(t.DB or ~/MailArchive/mailroom.sqlite). argv=None means sys.argv[1:]
+— otherwise --db on the process command line is ignored and a child
+can still open Mini's empty SoR stub. embed_backfill.py already
+accepts --db; the orchestrator still passes --db and MAILROOM_DB so
+every child opens the same copy as the driver.
 
   /usr/bin/python3 mailroom_copy_db.py --db /tmp/mailroom-copy.sqlite
   /usr/bin/python3 mailroom_copy_db.py --db /tmp/mailroom.sqlite
@@ -86,9 +88,14 @@ def resolve_copy_db(cli_db: str | None = None) -> Path:
 
 
 def parse_db_cli(argv: list[str] | None) -> str | None:
-    """Return --db value from argv, or None. Ignores other flags."""
-    if not argv:
-        return None
+    """Return --db value from argv, or None. Ignores other flags.
+
+    argv=None reads sys.argv[1:] (the process command line without the
+    program name). An explicit empty list means "no CLI flags". Treating
+    None like [] would ignore --db on the real command line.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -103,8 +110,41 @@ def parse_db_cli(argv: list[str] | None) -> str | None:
 
 
 def resolve_from_argv(argv: list[str] | None = None) -> Path:
-    """Resolve copy DB from argv --db, else $MAILROOM_DB. Same allowlist."""
+    """Resolve copy DB from argv --db, else $MAILROOM_DB. Same allowlist.
+
+    argv=None reads sys.argv[1:].
+    """
     return resolve_copy_db(parse_db_cli(argv))
+
+
+def bind_copy_db(argv: list[str] | None = None) -> Path:
+    """Resolve the copy DB, export MAILROOM_DB, emit db_mode=copy.
+
+    Daily children call this before any sqlite open. argv=None means
+    sys.argv[1:] so ``bind_copy_db()`` honors a process-level --db.
+    Raises CopyDbRefuse for unset / mailroom.sqlite / other names.
+    """
+    path = resolve_from_argv(argv)
+    os.environ["MAILROOM_DB"] = str(path)
+    emit_db_mode("copy")
+    return path
+
+
+def child_main(argv: list[str] | None = None, *, name: str = "child") -> int:
+    """Shared daily-child entry: bind copy DB, print opened_db, fail closed.
+
+    No IMAP, Keychain, or classify work. GitHub contract is SoR bind.
+    Mini-local live bodies should call bind_copy_db() the same way.
+    """
+    del name
+    try:
+        path = bind_copy_db(argv)
+    except CopyDbRefuse as exc:
+        emit_db_mode("refused")
+        sys.stderr.write("error: %s\n" % exc)
+        return 2
+    sys.stdout.write("opened_db=%s\n" % path)
+    return 0
 
 
 def emit_db_mode(mode: str) -> None:
