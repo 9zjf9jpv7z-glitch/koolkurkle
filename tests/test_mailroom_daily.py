@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import stat
 import subprocess
@@ -62,6 +63,12 @@ class StampTests(unittest.TestCase):
             daily.write_ok_stamp(stamp, now=0)
             text = stamp.read_text(encoding="utf-8")
             self.assertTrue(text.startswith("1970-01-01T00:00:00Z"))
+            self.assertFalse((Path(tmp) / "last_daily_rag_ok.tmp").exists())
+
+    def test_write_ok_stamp_is_atomic_replace(self):
+        src = inspect.getsource(daily.write_ok_stamp)
+        self.assertIn("replace", src)
+        self.assertIn(".tmp", src)
 
 
 class EmbedPythonTests(unittest.TestCase):
@@ -170,62 +177,73 @@ class MainChainTests(unittest.TestCase):
             _write_executable(scripts / name, ok)
         return archive, scripts, logs, venv_py
 
+    def _copy_db(self, archive: Path) -> Path:
+        return archive / "mailroom-copy.sqlite"
+
+    def _run_main(self, archive, scripts, logs, extra=None):
+        argv = [
+            "--archive",
+            str(archive),
+            "--scripts",
+            str(scripts),
+            "--logs",
+            str(logs),
+            "--db",
+            str(self._copy_db(archive)),
+        ]
+        if extra:
+            argv.extend(extra)
+        env = {
+            "MAILROOM_VENV_PY": str(archive / ".venv" / "bin" / "python"),
+            "MAILROOM_APPLE_PY": sys.executable,
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(daily, "check_embed_health"):
+                return daily.main(argv)
+
     def test_success_writes_stamp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            archive, scripts, logs, venv_py = self._layout(Path(tmp))
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
             stamp = logs / daily.STAMP_NAME
-            env = {
-                "MAILROOM_VENV_PY": str(venv_py),
-                "MAILROOM_APPLE_PY": sys.executable,
-            }
-            with patch.dict(os.environ, env, clear=False):
-                rc = daily.main(
-                    [
-                        "--archive",
-                        str(archive),
-                        "--scripts",
-                        str(scripts),
-                        "--logs",
-                        str(logs),
-                        "--force",
-                    ]
-                )
+            rc = self._run_main(archive, scripts, logs, ["--force"])
             self.assertEqual(rc, 0)
             self.assertTrue(stamp.is_file())
+            self.assertTrue((logs / daily.IMAP_STAMP).is_file())
+            self.assertTrue((logs / daily.BODIES_STAMP).is_file())
+            self.assertTrue((logs / daily.EMBED_STAMP).is_file())
 
     def test_failure_does_not_write_stamp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            archive, scripts, logs, venv_py = self._layout(Path(tmp))
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
+            _write_executable(
+                scripts / "imap_newmail.py",
+                "#!/usr/bin/env python3\nimport sys\nsys.exit(7)\n",
+            )
+            rc = self._run_main(archive, scripts, logs, ["--force"])
+            self.assertEqual(rc, 7)
+            self.assertFalse((logs / daily.STAMP_NAME).exists())
+            self.assertFalse((logs / daily.IMAP_STAMP).exists())
+
+    def test_classify_warn_still_writes_daily_stamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
             _write_executable(
                 scripts / "classify.py",
                 "#!/usr/bin/env python3\nimport sys\nsys.exit(7)\n",
             )
-            env = {
-                "MAILROOM_VENV_PY": str(venv_py),
-                "MAILROOM_APPLE_PY": sys.executable,
-            }
-            with patch.dict(os.environ, env, clear=False):
-                rc = daily.main(
-                    [
-                        "--archive",
-                        str(archive),
-                        "--scripts",
-                        str(scripts),
-                        "--logs",
-                        str(logs),
-                        "--force",
-                    ]
-                )
-            self.assertEqual(rc, 7)
-            self.assertFalse((logs / daily.STAMP_NAME).exists())
+            rc = self._run_main(archive, scripts, logs, ["--force"])
+            self.assertEqual(rc, 0)
+            self.assertTrue((logs / daily.STAMP_NAME).is_file())
+            self.assertTrue((logs / daily.IMAP_STAMP).is_file())
+            self.assertTrue((logs / daily.EMBED_STAMP).is_file())
 
     def test_fresh_stamp_is_quiet_skip(self):
         with tempfile.TemporaryDirectory() as tmp:
-            archive, scripts, logs, venv_py = self._layout(Path(tmp))
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
             stamp = logs / daily.STAMP_NAME
             daily.write_ok_stamp(stamp)
             env = {
-                "MAILROOM_VENV_PY": str(venv_py),
+                "MAILROOM_VENV_PY": str(archive / ".venv" / "bin" / "python"),
                 "MAILROOM_APPLE_PY": sys.executable,
             }
             with patch.dict(os.environ, env, clear=False):
@@ -239,6 +257,8 @@ class MainChainTests(unittest.TestCase):
                                 str(scripts),
                                 "--logs",
                                 str(logs),
+                                "--db",
+                                str(self._copy_db(archive)),
                                 "--skip-if-fresh",
                             ]
                         )
@@ -248,25 +268,272 @@ class MainChainTests(unittest.TestCase):
 
     def test_dry_run_does_not_write_stamp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            archive, scripts, logs, venv_py = self._layout(Path(tmp))
-            env = {
-                "MAILROOM_VENV_PY": str(venv_py),
-                "MAILROOM_APPLE_PY": sys.executable,
-            }
-            with patch.dict(os.environ, env, clear=False):
-                rc = daily.main(
-                    [
-                        "--archive",
-                        str(archive),
-                        "--scripts",
-                        str(scripts),
-                        "--logs",
-                        str(logs),
-                        "--dry-run",
-                    ]
-                )
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
+            rc = self._run_main(archive, scripts, logs, ["--dry-run"])
             self.assertEqual(rc, 0)
             self.assertFalse((logs / daily.STAMP_NAME).exists())
+
+    def test_resume_skips_successful_imap_watermark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
+            daily.write_ok_stamp(logs / daily.IMAP_STAMP)
+            _write_executable(
+                scripts / "imap_newmail.py",
+                "#!/usr/bin/env python3\nimport sys\nsys.exit(9)\n",
+            )
+            rc = self._run_main(archive, scripts, logs, ["--force"])
+            self.assertEqual(rc, 0)
+            self.assertTrue((logs / daily.STAMP_NAME).is_file())
+            self.assertTrue((logs / daily.BODIES_STAMP).is_file())
+            self.assertTrue((logs / daily.EMBED_STAMP).is_file())
+
+    def test_stale_watermarks_are_redone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive, scripts, logs, _venv_py = self._layout(Path(tmp))
+            now = 5_000_000.0
+            stale = now - daily.CATCH_UP_MAX_AGE_SEC - 60
+            daily.write_ok_stamp(logs / daily.STAMP_NAME, now=stale)
+            daily.write_ok_stamp(logs / daily.IMAP_STAMP, now=stale)
+            _write_executable(
+                scripts / "imap_newmail.py",
+                "#!/usr/bin/env python3\nimport sys\nsys.exit(9)\n",
+            )
+            rc = self._run_main(archive, scripts, logs, ["--force"])
+            self.assertEqual(rc, 9)
+            self.assertLess(
+                (logs / daily.STAMP_NAME).stat().st_mtime,
+                now - 1000,
+            )
+
+
+class PhaseWatermarkTests(unittest.TestCase):
+    def test_missing_phase_is_not_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            phase = Path(tmp) / "last_imap_ok"
+            daily_stamp = Path(tmp) / "last_daily_rag_ok"
+            self.assertFalse(
+                daily.phase_done_this_cycle(phase, daily_stamp, now=1_000_000)
+            )
+
+    def test_fresh_phase_without_daily_stamp_resumes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            phase = Path(tmp) / "last_imap_ok"
+            daily_stamp = Path(tmp) / "last_daily_rag_ok"
+            now = 2_000_000.0
+            daily.write_ok_stamp(phase, now=now - 60)
+            self.assertTrue(daily.phase_done_this_cycle(phase, daily_stamp, now=now))
+
+    def test_stale_phase_is_redone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            phase = Path(tmp) / "last_imap_ok"
+            daily_stamp = Path(tmp) / "last_daily_rag_ok"
+            now = 3_000_000.0
+            daily.write_ok_stamp(phase, now=now - daily.CATCH_UP_MAX_AGE_SEC - 10)
+            self.assertFalse(daily.phase_done_this_cycle(phase, daily_stamp, now=now))
+
+    def test_phase_older_than_daily_stamp_is_redone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            phase = Path(tmp) / "last_imap_ok"
+            daily_stamp = Path(tmp) / "last_daily_rag_ok"
+            now = 4_000_000.0
+            daily.write_ok_stamp(phase, now=now - 120)
+            daily.write_ok_stamp(daily_stamp, now=now - 30)
+            self.assertFalse(daily.phase_done_this_cycle(phase, daily_stamp, now=now))
+
+
+class CopyDbGuardTests(unittest.TestCase):
+    """Interface proof + negative smoke. No live IMAP."""
+
+    def test_allowlist_accepts_copy_basenames(self):
+        self.assertTrue(daily.allowed_copy_db(Path("/tmp/mailroom-copy.sqlite")))
+        self.assertTrue(
+            daily.allowed_copy_db(Path("/tmp/mailroom-daily-copy.sqlite"))
+        )
+        self.assertEqual(
+            daily.resolve_driver_db("/tmp/mailroom-copy.sqlite", Path("/tmp")).name,
+            "mailroom-copy.sqlite",
+        )
+        self.assertEqual(
+            daily.resolve_driver_db(
+                "/tmp/mailroom-daily-copy.sqlite", Path("/tmp")
+            ).name,
+            "mailroom-daily-copy.sqlite",
+        )
+
+    def test_interface_proof_refuses_sor_basename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "mailroom.sqlite"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "mailroom_daily.py"),
+                    "--archive",
+                    tmp,
+                    "--db",
+                    str(db),
+                    "--print-plan",
+                    "--allow-missing",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "MAILROOM_DB": str(db)},
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("db_mode=refused", proc.stderr)
+        self.assertIn("mailroom.sqlite", proc.stderr)
+        self.assertIn("allowlist", proc.stderr)
+        self.assertNotIn("imap_newmail", proc.stdout)
+        self.assertNotIn("db_mode=copy", proc.stderr)
+
+    def test_interface_proof_accepts_copy_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("mailroom-copy.sqlite", "mailroom-daily-copy.sqlite"):
+                db = Path(tmp) / name
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "mailroom_daily.py"),
+                        "--archive",
+                        tmp,
+                        "--scripts",
+                        tmp,
+                        "--logs",
+                        tmp,
+                        "--db",
+                        str(db),
+                        "--print-plan",
+                        "--allow-missing",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env={**os.environ, "MAILROOM_DB": str(db)},
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn("db_mode=copy", proc.stderr)
+                self.assertNotIn("db_mode=refused", proc.stderr)
+
+    def test_unset_mailroom_db_refuses(self):
+        env = {k: v for k, v in os.environ.items() if k != "MAILROOM_DB"}
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "mailroom_daily.py"),
+                    "--archive",
+                    tmp,
+                    "--print-plan",
+                    "--allow-missing",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("db_mode=refused", proc.stderr)
+        self.assertIn("unset", proc.stderr)
+        self.assertIn("explicit copy path", proc.stderr)
+
+    def test_negative_smoke_fails_if_guard_allows_sor_or_missing_allowlist(self):
+        """FAIL if the guard would allow mailroom.sqlite or has no allowlist."""
+        self.assertTrue(hasattr(daily, "COPY_DB_BASENAMES"))
+        self.assertIn("mailroom-copy.sqlite", daily.COPY_DB_BASENAMES)
+        self.assertIn("mailroom-daily-copy.sqlite", daily.COPY_DB_BASENAMES)
+        self.assertNotIn("mailroom.sqlite", daily.COPY_DB_BASENAMES)
+        self.assertFalse(daily.allowed_copy_db(Path("/x/mailroom.sqlite")))
+        self.assertFalse(daily.allowed_copy_db(Path("/x/other.sqlite")))
+        with self.assertRaises(daily.DailyRefuse) as ctx:
+            daily.resolve_driver_db("mailroom.sqlite", Path("/tmp"))
+        self.assertIn("mailroom.sqlite", str(ctx.exception))
+        with patch.dict(os.environ, {"MAILROOM_DB": ""}, clear=False):
+            with self.assertRaises(daily.DailyRefuse):
+                daily.resolve_driver_db(None, Path("/tmp"))
+        src = inspect.getsource(daily.main)
+        self.assertIn("resolve_driver_db", src)
+        self.assertIn("DailyRefuse", src)
+        self.assertIn("emit_db_mode", src)
+        with patch.dict(os.environ, {"MAILROOM_DB": ""}, clear=False):
+            self.assertIsNone(daily.default_db_path(Path("/tmp")))
+
+    def test_refuse_is_hard_fail_not_fail_open(self):
+        src = inspect.getsource(daily.main)
+        self.assertIn('emit_db_mode("refused")', src)
+        self.assertIn("return 2", src)
+        self.assertNotIn("fail_open", src)
+
+
+class FlockTests(unittest.TestCase):
+    def test_acquire_and_second_holder_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "mailroom.daily.lock"
+            held = daily.acquire_daily_lock(lock)
+            try:
+                with self.assertRaises(daily.DailyLockHeld) as ctx:
+                    daily.acquire_daily_lock(lock)
+                self.assertIn("mailroom.daily.lock", str(ctx.exception))
+                self.assertIn("double-run", str(ctx.exception))
+            finally:
+                daily.release_daily_lock(held)
+            held2 = daily.acquire_daily_lock(lock)
+            daily.release_daily_lock(held2)
+
+    def test_held_lock_skips_main_without_imap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "MailArchive"
+            archive.mkdir()
+            lock = archive / daily.LOCK_NAME
+            held = daily.acquire_daily_lock(lock)
+            try:
+                with patch.object(daily, "build_plan") as plan:
+                    rc = daily.main(
+                        [
+                            "--archive",
+                            str(archive),
+                            "--db",
+                            str(archive / "mailroom-copy.sqlite"),
+                            "--force",
+                        ]
+                    )
+                self.assertEqual(rc, 0)
+                plan.assert_not_called()
+            finally:
+                daily.release_daily_lock(held)
+
+
+class EmbedHealthTests(unittest.TestCase):
+    def test_health_ok(self):
+        class _Resp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(daily.urllib.request, "urlopen", return_value=_Resp()):
+            daily.check_embed_health()
+
+    def test_health_refuses_when_down(self):
+        with patch.object(
+            daily.urllib.request,
+            "urlopen",
+            side_effect=daily.urllib.error.URLError("down"),
+        ):
+            with self.assertRaises(daily.DailyError) as ctx:
+                daily.check_embed_health()
+        self.assertIn("/api/tags", str(ctx.exception))
+
+    def test_embed_health_url_uses_ollama_host(self):
+        with patch.dict(
+            os.environ, {"OLLAMA_HOST": "http://127.0.0.1:11434"}, clear=False
+        ):
+            self.assertEqual(
+                daily.embed_health_url(),
+                "http://127.0.0.1:11434/api/tags",
+            )
 
 
 class SourceHygieneTests(unittest.TestCase):
@@ -297,6 +564,16 @@ class SourceHygieneTests(unittest.TestCase):
                 self.assertNotIn(token, text, msg=path.name)
             if path.name in named:
                 self.assertIn("mailroom.imap.app-password", text)
+            self.assertNotIn("com.baconhill.mailroom-daily", text)
+
+    def test_daily_driver_does_not_start_generate(self):
+        text = (SCRIPTS / "mailroom_daily.py").read_text(encoding="utf-8")
+        self.assertNotIn("ask_mail.py", text)
+        self.assertNotIn("lms load", text)
+        self.assertNotIn("LM Studio.app", text)
+        self.assertNotIn("open -a", text)
+        self.assertNotIn("35B", text)
+        self.assertIn("/api/tags", text)
 
 
 class ShellWrapperTests(unittest.TestCase):
@@ -312,7 +589,13 @@ class ShellWrapperTests(unittest.TestCase):
         self.assertIn("--skip-if-fresh", text)
         self.assertIn("/usr/bin/curl", text)
         self.assertIn(".venv/bin/python", text)
+        self.assertIn("mailroom-copy.sqlite", text)
+        self.assertIn("mailroom-daily-copy.sqlite", text)
+        self.assertIn("db_mode=refused", text)
+        self.assertIn("db_mode=copy", text)
+        self.assertIn("mailroom.daily.lock", text)
         self.assertNotIn("find-generic-password -w '", text)
+        self.assertNotIn("com.baconhill.mailroom-daily", text)
 
 
 NEW_KEYCHAIN = "mailroom.imap.app-password"
@@ -386,6 +669,7 @@ class KeychainFallbackTests(unittest.TestCase):
             "MAILARCHIVE": str(archive),
             "MAILARCHIVE_SCRIPTS": str(scripts),
             "MAILARCHIVE_LOGS": str(logs),
+            "MAILROOM_DB": str(archive / "mailroom-copy.sqlite"),
             "MAILROOM_SECURITY_BIN": str(security),
             "MAILROOM_APPLE_PY": sys.executable,
             "MAILROOM_FAKE_SECURITY_LOG": str(log),
@@ -504,6 +788,52 @@ class KeychainFallbackTests(unittest.TestCase):
         self.assertIn("password_sha256=%s" % _sha256(OLD_PW), proc.stdout)
         self.assertIn("falling back", proc.stderr)
         self.assertEqual(proc.security_log.split(), [NEW_KEYCHAIN, LEGACY_KEYCHAIN])
+        self._assert_no_secret_leak(proc)
+
+    def test_wrapper_refuses_sor_basename_before_keychain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(
+                Path(tmp),
+                items={NEW_KEYCHAIN: NEW_PW},
+                extra_env={
+                    "MAILROOM_DB": str(Path(tmp) / "MailArchive" / "mailroom.sqlite"),
+                },
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("db_mode=refused", proc.stderr)
+        self.assertIn("mailroom.sqlite", proc.stderr)
+        self.assertNotIn("password_loaded", proc.stdout)
+        self.assertEqual(proc.security_log, "")
+        self._assert_no_secret_leak(proc)
+
+    def test_wrapper_refuses_unset_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(
+                Path(tmp),
+                items={NEW_KEYCHAIN: NEW_PW},
+                extra_env={"MAILROOM_DB": ""},
+            )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("db_mode=refused", proc.stderr)
+        self.assertIn("unset", proc.stderr)
+        self.assertNotIn("password_loaded", proc.stdout)
+        self.assertEqual(proc.security_log, "")
+        self._assert_no_secret_leak(proc)
+
+    def test_wrapper_accepts_daily_copy_basename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run(
+                Path(tmp),
+                items={NEW_KEYCHAIN: NEW_PW},
+                extra_env={
+                    "MAILROOM_DB": str(
+                        Path(tmp) / "MailArchive" / "mailroom-daily-copy.sqlite"
+                    ),
+                },
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("db_mode=copy", proc.stderr)
+        self.assertIn("password_loaded=1", proc.stdout)
         self._assert_no_secret_leak(proc)
 
     def test_preset_env_skips_keychain(self):

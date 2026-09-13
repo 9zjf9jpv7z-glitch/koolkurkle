@@ -8,25 +8,29 @@ scripts that already live in `~/MailArchive/scripts` (headers / FTS / 8pm
 classify+bills / `embed_backfill.py`). Do not treat this PR as a rewrite of
 those tools.
 
-## Source of record
+## Preferred practice (copy-only until SoR cutover)
 
-Default driver DB: Mini-local `~/MailArchive/mailroom.sqlite`.
+The Mini daily job writes **only** a copy DB. Set `MAILROOM_DB` (or `--db`)
+to a path whose basename is `mailroom-copy.sqlite` or
+`mailroom-daily-copy.sqlite`. The driver **refuses** to start (non-zero,
+`db_mode=refused`, no IMAP/embed) if the variable is unset or the basename
+is `mailroom.sqlite` or anything else.
 
-Prefer the Mini as the 24/7 source of record when the copy/merge from the
-MBP is done. **One writer.** Do not mount the live SQLite over SMB/NFS and
-do not dual-write.
+**Why:** `mailroom.sqlite` is the SoR name. Until PR-5 cutover, Mini SoR
+may be empty while rem embed still holds `mailroom-copy`. A silent default
+to `mailroom.sqlite` would write the empty SoR or race the rem job.
+Copy-only keeps one writer on the live rem copy and leaves SoR promotion
+to PR-5 (out of scope here). Do not mount the live SQLite over SMB/NFS
+and do not dual-write.
 
-### Promote Mini to SoR (after MBP copy/merge)
+If rem embed still holds `mailroom-copy.sqlite`, point the daily job at
+`__HOME__/MailArchive/mailroom-daily-copy.sqlite` instead.
 
-1. Pause LaunchAgents / cron on **both** Macs (MBP 8pm and Mini daily).
-2. Backup `~/MailArchive` on both machines (`scp` push; not Grok Bot CopyToBox).
-3. Copy or merge the MBP DB onto the Mini as
-   `~/MailArchive/mailroom.sqlite` (or merge embed shards first, then copy).
-4. Confirm only the Mini will write: disable MBP writers that touch this file.
-5. Point Mini scripts at `~/MailArchive/mailroom.sqlite` (`MAILROOM_DB` /
-   `--db`). Bootstrap `com.mailroom.daily` on the Mini only.
-6. Keep the MBP as a laptop replica if you want — **read-only copy**, not a
-   second live writer.
+### SoR cutover is PR-5 (out of scope)
+
+Do **not** promote Mini `mailroom.sqlite` or change the allowlist in this
+driver. After PR-5, the same label can point at SoR. Until then, refuse
+is hard-fail (`db_mode=refused`), not fail-open.
 
 ## Pipeline
 
@@ -49,13 +53,26 @@ do not dual-write.
    present, `content_hash` NULL). Writer lock is per batch, not the rem
    job. Live rem LaunchAgents keep the old text path until EXIT.
 5. **ask_mail** is on-demand (CLI / HTTP / MCP) — not part of the nightly
-   chain. Generate is LM Studio when env is set; rerank is CrossEncoder
+   chain. This job must **not** start LM Studio or load 35B-class generate.
+   Generate stays a separate on-demand path. Rerank is CrossEncoder
    (fail-open if the optional extra is missing).
 
-Stamp: `~/MailArchive/logs/last_daily_rag_ok` is written **only** when the
-full chain exits 0. Missing or ≥ ~24h (15-minute slop so 20:00 calendar
-is not skipped) → run. Younger stamp → exit 0 with no output (RunAtLoad
-catch-up).
+Watermarks (atomic temp+replace) under `~/MailArchive/logs/`:
+
+- `last_imap_ok` — headers IMAP succeeded
+- `last_bodies_ok` — body/FTS succeeded
+- `last_embed_ok` — incremental embed succeeded
+- `last_daily_rag_ok` — written **only** when imap + bodies + embed
+  succeeded (classify/bills may warn and still allow this stamp)
+
+Catch-up: `last_daily_rag_ok` missing or ≥ ~24h (15-minute slop so 20:05
+calendar is not skipped) → run, **resume first failed phase**, do not redo
+successful watermarks from this cycle. Younger daily stamp → exit 0
+(RunAtLoad catch-up). Exclusive flock on `mailroom.daily.lock` so
+`StartCalendarInterval` + `RunAtLoad` cannot double-run.
+
+Embed health-check: `GET http://127.0.0.1:11434/api/tags` (`OLLAMA_HOST`)
+before the embed step. Local Ollama only — not a generate runtime.
 
 ## Python
 
@@ -86,7 +103,14 @@ Override the item with `MAILROOM_KEYCHAIN_ITEM` (the LaunchAgent plist sets
 this to the default). The wrapper calls
 `/usr/bin/security find-generic-password -s … -w` and exports
 `IMAP_APP_PASSWORD` for child IMAP scripts. Nothing in this repo stores
-the value.
+the value. Never echo or log the secret.
+
+Keychain must work from **launchd** (`launchctl start com.mailroom.daily`
+or the 20:05 calendar). A password that unlocks only in an interactive
+Terminal session is not enough — the GUI session Keychain path is
+different. Prove the item from `launchctl start`, then read
+`~/MailArchive/logs/daily_rag.stderr.log` (length / IMAP success only;
+never paste the secret).
 
 One-time **read fallback**: if the default name is missing or empty, the
 wrapper tries legacy `mailroom.icloud.app-password` once and warns on
@@ -154,7 +178,12 @@ security find-generic-password -s mailroom.imap.app-password -w | wc -c
 
 ## Install on Mini (LaunchAgent)
 
-Copy driver files into the silo, then bootstrap for the GUI session:
+Substitute `__HOME__`, copy the **same** driver (`run_mailroom_daily.sh` +
+`mailroom_daily.py` + `com.mailroom.daily`). Do **not** add a second
+label. Do **not** `launchctl bootout` this label (or rem embed agents)
+while rem embed is live — if rem still holds `mailroom-copy.sqlite`, set
+`MAILROOM_DB` to `mailroom-daily-copy.sqlite`, then bootstrap the same
+label.
 
 ```zsh
 # Mini — substitute __HOME__ with $HOME (launchd does not expand $HOME)
@@ -163,7 +192,7 @@ mkdir -p ~/MailArchive/scripts ~/MailArchive/logs ~/Library/LaunchAgents
 
 ```zsh
 # Mini — copy daily driver scripts
-cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py scripts/ask_mail.py \
+cp scripts/run_mailroom_daily.sh scripts/mailroom_daily.py \
   ~/MailArchive/scripts/
 ```
 
@@ -179,12 +208,14 @@ sed "s|__HOME__|$HOME|g" launchd/com.mailroom.daily.plist \
 ```
 
 ```zsh
-# Mini — bootout a previous daily agent if present
-launchctl bootout gui/$(id -u)/com.mailroom.daily 2>/dev/null || true
+# Mini — if rem embed still holds mailroom-copy, retarget daily-copy
+# (edit the installed plist MAILROOM_DB to
+#  __HOME__/MailArchive/mailroom-daily-copy.sqlite after sed)
+# Do not bootout while rem embed is live.
 ```
 
 ```zsh
-# Mini — bootstrap the daily LaunchAgent
+# Mini — bootstrap the same label (com.mailroom.daily)
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mailroom.daily.plist
 ```
 
@@ -194,17 +225,29 @@ launchctl enable gui/$(id -u)/com.mailroom.daily
 ```
 
 ```zsh
+# Mini — prove Keychain from launchd (not Terminal-only)
+launchctl start com.mailroom.daily
+```
+
+```zsh
 # Mini — optional one-shot kickstart
 # launchctl kickstart -k gui/$(id -u)/com.mailroom.daily
 ```
 
 Plist:
 
-- `StartCalendarInterval` 20:00 local (matches the 8pm mailroom chain)
-- `RunAtLoad` true — catch-up via the stamp
+- Label `com.mailroom.daily` (single existing driver)
+- `MAILROOM_DB=__HOME__/MailArchive/mailroom-copy.sqlite` (or
+  `mailroom-daily-copy.sqlite` when rem embed still holds the copy)
+- `MAILROOM_KEYCHAIN_ITEM=mailroom.imap.app-password`
+- `OLLAMA_HOST=http://127.0.0.1:11434`
+- `StartCalendarInterval` 20:05 local (precursor Minute 0; 8pm bills
+  digest stays a separate agent)
+- `Nice` 5
+- `RunAtLoad` true — catch-up via the stamp + flock
 - `KeepAlive` false
-- `PATH`, `PYTHONUNBUFFERED=1`
-- stdout / stderr under `~/MailArchive/logs/daily_rag.std{out,err}.log`
+- `PATH` Homebrew + system, `PYTHONUNBUFFERED=1`
+- stdout / stderr under `__HOME__/MailArchive/logs/daily_rag.std{out,err}.log`
 - checked-in plist is a template (`__HOME__`); install substitutes `$HOME`
 
 Manual:
@@ -224,14 +267,14 @@ Manual:
 Prefer LaunchAgent. If you must use cron on the Mini:
 
 ```cron
-0 20 * * * /bin/zsh $HOME/MailArchive/scripts/run_mailroom_daily.sh
+5 20 * * * MAILROOM_DB=$HOME/MailArchive/mailroom-copy.sqlite /bin/zsh $HOME/MailArchive/scripts/run_mailroom_daily.sh
 ```
 
 ## Mini vs MBP
 
 | | Mini (this job) | MBP |
 |---|---|---|
-| Role | 24/7 SoR when promoted | Laptop; pause writers after cutover |
+| Role | Copy-only daily until PR-5 | Laptop; rem embed may still hold the copy |
 | Scheduler | `com.mailroom.daily` | Do not also run a live writer on the same DB |
 | Embed Python | `~/MailArchive/.venv/bin/python` | Homebrew `/opt/homebrew/bin/python3` on embed PRs |
 | Headers curl | Apple `/usr/bin/curl` | Same |

@@ -6,11 +6,12 @@ iCloud mail retrieve scripts.
 
 LaunchAgent `com.mailroom.daily` on **mac-mini.local** (set your macOS login) runs the
 local IMAP → FTS → classify/bills → incremental embed chain. No Grok Bot at
-runtime. Default SoR is Mini-local `~/MailArchive/mailroom.sqlite` — one
-writer, no SMB/NFS dual-write.
+runtime. **Copy-only until PR-5:** set `MAILROOM_DB` to
+`mailroom-copy.sqlite` or `mailroom-daily-copy.sqlite`. Unset /
+`mailroom.sqlite` is refused (hard-fail). One writer, no SMB/NFS dual-write.
 
-Install, Keychain **name** (`mailroom.imap.app-password`), Mini vs MBP
-cutover, and the 24h `last_daily_rag_ok` stamp:
+Install, Keychain **name** (`mailroom.imap.app-password`), launchd Keychain
+proof, Mini copy-only notes (`$HOME` only), and phase watermarks:
 **[scripts/README.mailroom-daily.md](scripts/README.mailroom-daily.md)**.
 Human Terminal cards, Keychain create, privacy generics, GitHub SoR
 (Build is staging), and Little Snitch:

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Template: install substitutes __HOME__ with $HOME (launchd does not expand $HOME). -->
+<!-- Copy-only until SoR cutover (PR-5): MAILROOM_DB basename must be mailroom-copy.sqlite -->
+<!-- or mailroom-daily-copy.sqlite (use the latter when rem embed still holds the copy). -->
+<!-- Do not bootout this label while rem embed is live. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
@@ -20,20 +23,26 @@
 		<string>1</string>
 		<key>MAILARCHIVE</key>
 		<string>__HOME__/MailArchive</string>
+		<key>MAILROOM_DB</key>
+		<string>__HOME__/MailArchive/mailroom-copy.sqlite</string>
 		<key>MAILROOM_KEYCHAIN_ITEM</key>
 		<string>mailroom.imap.app-password</string>
+		<key>OLLAMA_HOST</key>
+		<string>http://127.0.0.1:11434</string>
 	</dict>
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
 		<integer>20</integer>
 		<key>Minute</key>
-		<integer>0</integer>
+		<integer>5</integer>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
 	<false/>
+	<key>Nice</key>
+	<integer>5</integer>
 	<key>StandardOutPath</key>
 	<string>__HOME__/MailArchive/logs/daily_rag.stdout.log</string>
 	<key>StandardErrorPath</key>

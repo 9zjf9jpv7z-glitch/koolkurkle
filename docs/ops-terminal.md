@@ -50,6 +50,21 @@ hostname
 hostname
 ```
 
+## Mini daily (copy-only)
+
+Preferred practice: the Mini daily job writes **only** a copy. Set
+`MAILROOM_DB` to `$HOME/MailArchive/mailroom-copy.sqlite` or
+`mailroom-daily-copy.sqlite`. Unset or `mailroom.sqlite` is a hard refuse
+(`db_mode=refused`) until SoR cutover (PR-5). Why: Mini SoR may be empty
+and rem embed may still hold the copy — a silent default would write the
+wrong file.
+
+Keychain must unlock from **launchd** (`launchctl start com.mailroom.daily`).
+Terminal-only `security` success is not enough. Substitute `__HOME__`,
+bootstrap the same label, and do **not** bootout while rem embed is live —
+use `mailroom-daily-copy.sqlite` then. Full cards:
+[README.mailroom-daily.md](../scripts/README.mailroom-daily.md).
+
 ## Keychain create
 
 Preferred service name: `mailroom.imap.app-password`. Keep `-w` last so
