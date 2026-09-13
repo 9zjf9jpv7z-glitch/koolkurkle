@@ -56,3 +56,11 @@ with_writer_lock.py --purpose embed_backfill -- \
 ```
 
 Testing overrides: `--lock-file`, `--max-age-hours` (default 4).
+
+## Same-file embed_backfill (HARD DECK)
+
+`--lock` on `embed_backfill.py` is **per batch / heartbeat**, not the
+whole rem. It still refuses `ACTION_REQUIRED` and a lock held >4h. It
+does **not** make two `embed_backfill` processes on one `.sqlite` safe.
+Same-file 2-wide is HARD DECK. Preferred shard / char-band practice:
+[docs/embed-backfill.md](../embed-backfill.md).

@@ -5,6 +5,9 @@ Reads bodies from messages_fts (join messages_fts.id = messages.id).
 Always skips lane=auth unless --no-skip-auth. Never calls OpenAI.
 Does not call IMAP. Does not rewrite FTS ingest.
 
+One writer per .sqlite is HARD DECK. --lock is per-batch, not a
+same-file 2-wide permit. Read docs/embed-backfill.md before start.
+
 Mac (Homebrew Python — Apple /usr/bin/python3 cannot load extensions):
 
   /opt/homebrew/bin/python3 embed_backfill.py --db ~/MailArchive/mailroom.sqlite --dry-run

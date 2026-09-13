@@ -86,6 +86,8 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("sys.argv[1:]", text)
         self.assertIn("Do **not** `launchctl bootout`", text)
         self.assertIn("launchctl start com.mailroom.daily", text)
+        self.assertIn("embed-backfill.md", text)
+        self.assertIn("HARD DECK", text)
         self.assertIn("cron", text)
         self.assertIn("s|__HOME__|$HOME|g", text)
         self.assertIn("$HOME/MailArchive/scripts/run_mailroom_daily.sh", text)
