@@ -70,6 +70,8 @@ class OpsTerminalDocTests(unittest.TestCase):
         self.assertIn("--phase retrieve", text)
         self.assertIn("copy-only", text)
         self.assertIn("mailroom-copy.sqlite", text)
+        self.assertIn("same copy", text)
+        self.assertIn("mailroom_copy_db.py", text)
         self.assertIn("launchctl start com.mailroom.daily", text)
         self.assertNotIn("/Users/", text)
         self.assertNotIn("-----BEGIN", text)

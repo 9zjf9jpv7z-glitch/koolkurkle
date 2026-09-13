@@ -57,7 +57,9 @@ Preferred practice: the Mini daily job writes **only** a copy. Set
 `mailroom-daily-copy.sqlite`. Unset or `mailroom.sqlite` is a hard refuse
 (`db_mode=refused`) until SoR cutover (PR-5). Why: Mini SoR may be empty
 and rem embed may still hold the copy — a silent default would write the
-wrong file.
+wrong file. Daily children must use that same copy (`--db` and
+`$MAILROOM_DB`, via `mailroom_copy_db.py`) so IMAP/classify/bills do not
+open the empty SoR stub.
 
 Keychain must unlock from **launchd** (`launchctl start com.mailroom.daily`).
 Terminal-only `security` success is not enough. Substitute `__HOME__`,
